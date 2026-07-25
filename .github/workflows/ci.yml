@@ -12,17 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  # TEMPORARY DIAGNOSTIC - remove once CI is confirmed green.
-  # Uses no actions and no service containers, so if this fails too, the problem
-  # is that jobs are never being assigned a runner (account/repo level), not
-  # anything about the workflow's content.
-  runner-smoke-test:
-    name: Runner smoke test
-    runs-on: ubuntu-latest
-    steps:
-      - name: Echo
-        run: echo "A runner picked up this job."
-
   # Runs in parallel with `frontend` (no `needs:` between them). If either job
   # fails, the workflow as a whole fails.
   backend:
