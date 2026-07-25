@@ -3,9 +3,10 @@ import type { DailyStat } from "@/types/stats";
 interface DayCellProps {
   day: number;
   stat?: DailyStat;
+  onClick?: () => void;
 }
 
-export function DayCell({ day, stat }: DayCellProps) {
+export function DayCell({ day, stat, onClick }: DayCellProps) {
   const hasTrades = (stat?.trade_count ?? 0) > 0;
   const pnl = stat?.pnl ?? 0;
 
@@ -18,8 +19,10 @@ export function DayCell({ day, stat }: DayCellProps) {
         : "bg-zinc-100 border-zinc-300 text-zinc-700";
 
   return (
-    <div
-      className={`flex aspect-square flex-col justify-between rounded-xl border p-2 transition-colors ${colorClasses}`}
+    <button
+      type="button"
+      onClick={onClick}
+      className={`flex aspect-square flex-col justify-between rounded-xl border p-2 text-left transition-colors hover:brightness-95 focus:outline-none focus:ring-2 focus:ring-zinc-400 ${colorClasses}`}
     >
       <div className="flex items-start justify-between">
         <span className="text-xs font-medium">{day}</span>
@@ -39,6 +42,6 @@ export function DayCell({ day, stat }: DayCellProps) {
           </p>
         </div>
       )}
-    </div>
+    </button>
   );
 }

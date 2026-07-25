@@ -8,9 +8,10 @@ interface CalendarGridProps {
   year: number;
   month: number;
   statsByDate: Map<string, DailyStat>;
+  onDayClick: (date: string) => void;
 }
 
-export function CalendarGrid({ year, month, statsByDate }: CalendarGridProps) {
+export function CalendarGrid({ year, month, statsByDate, onDayClick }: CalendarGridProps) {
   const cells = getCalendarCells(year, month);
 
   return (
@@ -27,17 +28,18 @@ export function CalendarGrid({ year, month, statsByDate }: CalendarGridProps) {
       </div>
 
       <div className="grid grid-cols-7 gap-2">
-        {cells.map((day, i) =>
-          day === null ? (
-            <div key={`blank-${i}`} className="aspect-square" />
-          ) : (
+        {cells.map((day, i) => {
+          if (day === null) return <div key={`blank-${i}`} className="aspect-square" />;
+          const dateStr = formatDateParam(year, month, day);
+          return (
             <DayCell
-              key={formatDateParam(year, month, day)}
+              key={dateStr}
               day={day}
-              stat={statsByDate.get(formatDateParam(year, month, day))}
+              stat={statsByDate.get(dateStr)}
+              onClick={() => onDayClick(dateStr)}
             />
-          ),
-        )}
+          );
+        })}
       </div>
     </div>
   );

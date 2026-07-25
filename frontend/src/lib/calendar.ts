@@ -24,3 +24,15 @@ export function getCalendarCells(year: number, month: number): (number | null)[]
   while (cells.length % 7 !== 0) cells.push(null);
   return cells;
 }
+
+/** Converts an ISO datetime string to a value usable by <input type="datetime-local">. */
+export function toDatetimeLocalValue(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+/** Converts a <input type="datetime-local"> value (local time, no timezone) to an ISO string. */
+export function datetimeLocalToIso(value: string): string {
+  return new Date(value).toISOString();
+}

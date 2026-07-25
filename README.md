@@ -3,9 +3,9 @@
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
-**Status:** Phase 1 (backend foundation) and Phase 2 (frontend core: auth pages +
-calendar dashboard) complete. Trade entry forms, the day-detail drawer, and analytics
-are Phase 3+.
+**Status:** Phase 1 (backend foundation), Phase 2 (frontend core: auth pages + calendar
+dashboard), and Phase 3 (trade management: day-detail view, add/edit/delete trades)
+complete. Analytics (Phase 4) and CSV import / polish (Phase 5) are next.
 
 ## Stack
 
@@ -72,7 +72,7 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | POST   | `/accounts`                   | Create a trading account (auth required)  |
 | GET    | `/accounts`                   | List your accounts                        |
 | POST   | `/trades`                     | Create a trade                            |
-| GET    | `/trades`                     | List your trades (optional `account_id`)  |
+| GET    | `/trades`                     | List your trades (optional `account_id`, `date=YYYY-MM-DD`) |
 | GET    | `/trades/{id}`                | Get a single trade                        |
 | PUT    | `/trades/{id}`                | Update a trade                            |
 | DELETE | `/trades/{id}`                | Delete a trade                            |
@@ -112,7 +112,7 @@ npm run dev
 
 The app is now live at `http://localhost:3000`.
 
-### What's built (Phase 2)
+### What's built (Phase 2 + 3)
 
 - `/` — landing page, redirects to `/dashboard` if already logged in
 - `/login`, `/register` — call the backend's `/auth/login` and `/auth/register`,
@@ -121,8 +121,18 @@ The app is now live at `http://localhost:3000`.
   on load and on prev/next month navigation; day cells are green/red/gray by P&L sign,
   show P&L/trade count/win rate, and a dot when a day has trades; header shows monthly
   P&L and trading-day count. Loading (skeleton) and empty-month states are handled.
+- **Day detail** — clicking a day cell opens a modal listing that day's trades
+  (symbol, side, entry/exit time, P&L), fetched via `GET /trades?date=YYYY-MM-DD`.
+- **Add trade** — from the dashboard header (`+ Add Trade`) or from the day-detail
+  modal. Fields: account, symbol, side, entry/exit time, entry/exit price, size, tags,
+  notes. P&L and win/loss/breakeven status are computed client-side from
+  side/entry/exit/size (see `lib/pnl.ts`) rather than typed in by hand. If the user has
+  no trading account yet, the flow prompts them to create one first (`POST /accounts`),
+  then opens the trade form.
+- **Edit / delete trade** — from the day-detail modal, `PUT`/`DELETE /trades/{id}`.
+  Both refresh the day's trade list and the month's calendar stats afterward.
 
-Trade entry, the day-detail drawer, and analytics are Phase 3+ and not implemented yet.
+Analytics (equity curve, tag filtering) and CSV import are Phase 4+ and not implemented yet.
 
 ### JWT storage: localStorage vs httpOnly cookie
 

@@ -1,4 +1,7 @@
+from datetime import date
+
 from fastapi import APIRouter, Depends, HTTPException, status
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.core.database import get_db
@@ -43,12 +46,15 @@ def create_trade(
 @router.get("", response_model=list[TradeRead])
 def list_trades(
     account_id: int | None = None,
+    date: date | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     query = db.query(Trade).join(Account).filter(Account.user_id == current_user.id)
     if account_id is not None:
         query = query.filter(Trade.account_id == account_id)
+    if date is not None:
+        query = query.filter(func.date(Trade.entry_time) == date)
     return query.order_by(Trade.entry_time.desc()).all()
 
 

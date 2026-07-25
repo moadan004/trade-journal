@@ -1,4 +1,6 @@
+import type { AccountCreateInput, AccountRead } from "@/types/account";
 import type { CalendarStatsResponse } from "@/types/stats";
+import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -54,4 +56,28 @@ export function login(email: string, password: string): Promise<TokenResponse> {
 
 export function getCalendarStats(month: string, token: string): Promise<CalendarStatsResponse> {
   return request<CalendarStatsResponse>(`/stats/calendar?month=${month}`, {}, token);
+}
+
+export function listAccounts(token: string): Promise<AccountRead[]> {
+  return request<AccountRead[]>("/accounts", {}, token);
+}
+
+export function createAccount(payload: AccountCreateInput, token: string): Promise<AccountRead> {
+  return request<AccountRead>("/accounts", { method: "POST", body: JSON.stringify(payload) }, token);
+}
+
+export function listTradesByDate(date: string, token: string): Promise<TradeRead[]> {
+  return request<TradeRead[]>(`/trades?date=${date}`, {}, token);
+}
+
+export function createTrade(payload: TradeCreateInput, token: string): Promise<TradeRead> {
+  return request<TradeRead>("/trades", { method: "POST", body: JSON.stringify(payload) }, token);
+}
+
+export function updateTrade(id: number, payload: TradeUpdateInput, token: string): Promise<TradeRead> {
+  return request<TradeRead>(`/trades/${id}`, { method: "PUT", body: JSON.stringify(payload) }, token);
+}
+
+export function deleteTrade(id: number, token: string): Promise<void> {
+  return request<void>(`/trades/${id}`, { method: "DELETE" }, token);
 }
