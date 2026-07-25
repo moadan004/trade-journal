@@ -3,19 +3,20 @@
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
-**Status:** Phase 1 (backend foundation) complete. Phase 2+ (frontend) not yet built —
-`/frontend` is a bare `create-next-app` scaffold only.
+**Status:** Phase 1 (backend foundation) and Phase 2 (frontend core: auth pages +
+calendar dashboard) complete. Trade entry forms, the day-detail drawer, and analytics
+are Phase 3+.
 
 ## Stack
 
 - **Backend:** FastAPI + SQLAlchemy + Alembic, PostgreSQL, JWT auth (bcrypt via passlib)
-- **Frontend:** Next.js (App Router) + Tailwind (scaffolded, not built out yet)
+- **Frontend:** Next.js (App Router) + Tailwind, client-rendered auth + calendar dashboard
 
 ## Repo layout
 
 ```
 /backend    FastAPI app (routers/, models/, schemas/, core/, alembic/)
-/frontend   Next.js app (bare scaffold, Phase 2)
+/frontend   Next.js app (login/register pages, calendar dashboard)
 docker-compose.yml   Local Postgres for development
 plan.md              Full product/build plan
 ```
@@ -92,13 +93,71 @@ pytest tests/test_smoke.py -v -s
 
 This runs in-process against your configured `DATABASE_URL` — no separate server needed.
 
-## Frontend (Phase 2+, not yet built)
+## Frontend setup
+
+### 1. Configure environment
 
 ```bash
 cd frontend
+cp .env.local.example .env.local
+# edit .env.local if your backend isn't on http://localhost:8000
+```
+
+### 2. Install and run
+
+```bash
 npm install
 npm run dev
 ```
 
-Currently just the default `create-next-app` scaffold with Tailwind enabled — no journal
-UI has been implemented yet.
+The app is now live at `http://localhost:3000`.
+
+### What's built (Phase 2)
+
+- `/` — landing page, redirects to `/dashboard` if already logged in
+- `/login`, `/register` — call the backend's `/auth/login` and `/auth/register`,
+  store the returned JWT, redirect to `/dashboard`
+- `/dashboard` — month calendar (Sun–Sat grid) fetching `GET /stats/calendar?month=YYYY-MM`
+  on load and on prev/next month navigation; day cells are green/red/gray by P&L sign,
+  show P&L/trade count/win rate, and a dot when a day has trades; header shows monthly
+  P&L and trading-day count. Loading (skeleton) and empty-month states are handled.
+
+Trade entry, the day-detail drawer, and analytics are Phase 3+ and not implemented yet.
+
+### JWT storage: localStorage vs httpOnly cookie
+
+The frontend stores the JWT in `localStorage` and sends it as an `Authorization: Bearer`
+header, matching how the backend's `OAuth2PasswordBearer` dependency already expects it.
+
+- **Why not httpOnly cookies:** they're more resistant to XSS (JS can't read the token),
+  but they'd require the backend to set/read cookies (with `SameSite`/`CORS` credential
+  wiring) instead of a bearer header, and CSRF protection since cookies are sent
+  automatically. That's a backend auth change, not just a frontend one.
+- **Tradeoff accepted:** `localStorage` is vulnerable to token theft via XSS (e.g. a
+  malicious dependency or injected script can read it), but it's simple, needs zero
+  backend changes, and works identically whether the frontend and backend are on the
+  same or different origins. Worth revisiting if this app ever handles more sensitive
+  data or takes third-party scripts.
+
+## Running frontend + backend together
+
+Three things need to be running at once, each in its own terminal:
+
+```bash
+# 1. Postgres
+docker compose up -d postgres
+
+# 2. Backend (from /backend, with .venv active)
+cd backend && source .venv/bin/activate
+alembic upgrade head        # first time / after pulling new migrations
+uvicorn app.main:app --reload
+
+# 3. Frontend (from /frontend)
+cd frontend
+npm run dev
+```
+
+Then open `http://localhost:3000`, register an account, and you'll land on the
+calendar dashboard. The backend's CORS config already allows `http://localhost:3000`,
+and the frontend's `.env.local` already points at `http://localhost:8000`, so no
+extra wiring is needed for local dev.
