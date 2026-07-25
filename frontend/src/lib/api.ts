@@ -56,6 +56,13 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   });
 }
 
+export function googleAuth(idToken: string): Promise<TokenResponse> {
+  return request<TokenResponse>("/auth/google", {
+    method: "POST",
+    body: JSON.stringify({ id_token: idToken }),
+  });
+}
+
 function buildQuery(params: Record<string, string | number | undefined>): string {
   const usp = new URLSearchParams();
   Object.entries(params).forEach(([key, value]) => {

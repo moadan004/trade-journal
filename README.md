@@ -5,7 +5,8 @@ daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build
 
 **Status:** All 5 phases from `plan.md` are complete — backend foundation, frontend
 core, trade management, analytics, and Phase 5 polish (CSV import, mobile-responsive
-calendar with swipe navigation, dark mode).
+calendar with swipe navigation, dark mode) — plus a post-plan addition: Google OAuth
+sign-in alongside the original email/password auth.
 
 ## Stack
 
@@ -38,7 +39,8 @@ Postgres install or a hosted instance (e.g. Render), just point `DATABASE_URL` a
 ```bash
 cd backend
 cp .env.example .env
-# edit .env if you're not using the default docker-compose Postgres
+# edit .env if you're not using the default docker-compose Postgres, and/or to set a
+# real GOOGLE_CLIENT_ID once you have one (see "Google OAuth setup" below)
 ```
 
 ### 3. Install dependencies
@@ -67,8 +69,9 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 
 | Method | Path                          | Description                              |
 |--------|-------------------------------|-------------------------------------------|
-| POST   | `/auth/register`              | Create a user, returns a JWT              |
-| POST   | `/auth/login`                 | Log in, returns a JWT                     |
+| POST   | `/auth/register`              | Create a user with email/password, returns a JWT |
+| POST   | `/auth/login`                 | Log in with email/password, returns a JWT |
+| POST   | `/auth/google`                | Verify a Google ID token, create/link the account, returns the same kind of JWT |
 | POST   | `/accounts`                   | Create a trading account (auth required)  |
 | GET    | `/accounts`                   | List your accounts                        |
 | POST   | `/trades`                     | Create a trade                            |
@@ -101,6 +104,54 @@ with a reason (bad date, unrecognized side, etc.) rather than failing the whole
 import; the response reports `total_rows` / `imported` / `skipped`. See
 `frontend/public/sample-trade-import.csv` for a template.
 
+## Google OAuth setup
+
+Email/password auth (`/auth/register`, `/auth/login`) works out of the box with no
+setup. Google sign-in (`/auth/google`) needs a real OAuth Client ID from Google Cloud
+Console — until you provide one, both `.env.example` / `.env.local.example` ship a
+placeholder (`your-client-id.apps.googleusercontent.com`), and the "Sign in with
+Google" button on `/login` and `/register` shows a "not configured" note instead of
+trying to load Google's SDK against a fake ID.
+
+### Creating a real Client ID
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create (or
+   select) a project.
+2. **APIs & Services → OAuth consent screen** — configure it (External user type is
+   fine for testing with your own Google account; add your email as a test user if
+   the app is in "Testing" publishing status). No specific Google API needs to be
+   *enabled* for this flow — sign-in with Google uses Google Identity Services, not
+   a separately-enabled API — but the consent screen must exist before you can create
+   credentials.
+3. **APIs & Services → Credentials → Create Credentials → OAuth client ID.**
+   - Application type: **Web application**.
+   - **Authorized JavaScript origins**: add every origin the frontend will actually
+     be served from, e.g. `http://localhost:3000` for local dev, plus your deployed
+     frontend URL (e.g. `https://your-app.vercel.app`). This is the setting that
+     matters here — `@react-oauth/google` runs entirely client-side (it renders
+     Google's button and posts the resulting ID token to our own backend), so there
+     is no OAuth **redirect URI** to whitelist for this flow.
+4. Copy the generated Client ID (looks like
+   `1234567890-abc123.apps.googleusercontent.com`).
+5. Set it in **both** places (it's the same value, checked in two different ways —
+   the frontend needs it to initialize Google's SDK, the backend needs it to verify
+   that a given ID token was actually issued for *your* app and not someone else's):
+   - `backend/.env` → `GOOGLE_CLIENT_ID=...`
+   - `frontend/.env.local` → `NEXT_PUBLIC_GOOGLE_CLIENT_ID=...`
+6. Restart both dev servers (Next.js only inlines `NEXT_PUBLIC_*` vars at startup).
+
+### How the linking logic works
+
+- New email via Google → creates a `User` with `google_id` set and `password_hash`
+  null.
+- Existing email that previously registered with a password → the Google sign-in
+  links `google_id` onto that same row rather than creating a duplicate account, so
+  the user keeps all their existing trades/accounts either way they log in
+  afterward.
+- A password-less (Google-only) account trying `/auth/login` with a password gets
+  the same generic "Invalid email or password" as a nonexistent account — it doesn't
+  reveal that the email exists but has no password set.
+
 ## Smoke test
 
 With the API running and migrations applied, verify the full flow (register → login →
@@ -114,6 +165,15 @@ pytest tests/test_smoke.py -v -s
 
 This runs in-process against your configured `DATABASE_URL` — no separate server needed.
 
+`tests/test_google_auth.py` covers the `/auth/google` account-linking logic (new user,
+linking to an existing password account, the `/auth/login` guard for password-less
+accounts, rejecting an invalid token) with Google's token verification mocked out —
+run it the same way (`pytest tests/test_google_auth.py -v`) or just `pytest tests/`
+for everything. This is the only way to exercise that logic without a real Google
+account and Client ID: actually completing a Google sign-in requires a live consent
+screen and network access to Google's own script host, neither of which a test
+suite (or this sandboxed dev environment) can drive end-to-end.
+
 ## Frontend setup
 
 ### 1. Configure environment
@@ -121,7 +181,8 @@ This runs in-process against your configured `DATABASE_URL` — no separate serv
 ```bash
 cd frontend
 cp .env.local.example .env.local
-# edit .env.local if your backend isn't on http://localhost:8000
+# edit .env.local if your backend isn't on http://localhost:8000, and/or to set a
+# real NEXT_PUBLIC_GOOGLE_CLIENT_ID once you have one (see "Google OAuth setup" above)
 ```
 
 ### 2. Install and run
@@ -137,7 +198,9 @@ The app is now live at `http://localhost:3000`.
 
 - `/` — landing page, redirects to `/dashboard` if already logged in
 - `/login`, `/register` — call the backend's `/auth/login` and `/auth/register`,
-  store the returned JWT, redirect to `/dashboard`
+  store the returned JWT, redirect to `/dashboard`. Both also show a "Sign in with
+  Google" button below a divider — see "Google OAuth setup" above for what it takes
+  to make that button live instead of showing a "not configured" note.
 - `/dashboard` — month calendar (Sun–Sat grid) fetching `GET /stats/calendar?month=YYYY-MM`
   on load and on prev/next month navigation; day cells are green/red/gray by P&L sign,
   show P&L/trade count/win rate, and a dot when a day has trades; header shows monthly
