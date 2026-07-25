@@ -1,0 +1,51 @@
+import enum
+from datetime import datetime
+
+from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, func
+from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class TradeSide(str, enum.Enum):
+    long = "long"
+    short = "short"
+
+
+class TradeStatus(str, enum.Enum):
+    win = "win"
+    loss = "loss"
+    breakeven = "breakeven"
+
+
+class Trade(Base):
+    __tablename__ = "trades"
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False, index=True)
+
+    symbol: Mapped[str] = mapped_column(String(32), nullable=False, index=True)
+    side: Mapped[TradeSide] = mapped_column(Enum(TradeSide, name="trade_side"), nullable=False)
+
+    entry_time: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False, index=True)
+    exit_time: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    entry_price: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    exit_price: Mapped[float | None] = mapped_column(Numeric(18, 6), nullable=True)
+
+    size: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
+    pnl: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    fees: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+    r_multiple: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
+
+    tags: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)
+    notes: Mapped[str | None] = mapped_column(String, nullable=True)
+    screenshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
+    status: Mapped[TradeStatus] = mapped_column(Enum(TradeStatus, name="trade_status"), nullable=False)
+
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
+    )
+
+    account: Mapped["Account"] = relationship(back_populates="trades")
