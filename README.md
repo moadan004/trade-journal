@@ -1,5 +1,7 @@
 # Trade Journal
 
+[![CI](https://github.com/moadan004/trade-journal/actions/workflows/ci.yml/badge.svg)](https://github.com/moadan004/trade-journal/actions/workflows/ci.yml)
+
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
@@ -173,6 +175,30 @@ for everything. This is the only way to exercise that logic without a real Googl
 account and Client ID: actually completing a Google sign-in requires a live consent
 screen and network access to Google's own script host, neither of which a test
 suite (or this sandboxed dev environment) can drive end-to-end.
+
+## Continuous integration
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push to `main`
+and every pull request targeting `main`. Two jobs run **in parallel**, and the
+workflow fails if either one does:
+
+| Job | What it does |
+|-----|--------------|
+| **Backend** | Python 3.12, `pip install -r requirements.txt`, `alembic upgrade head`, `pytest tests/` — against a `postgres:16-alpine` service container (same major as `docker-compose.yml`) |
+| **Frontend** | Node 24, `npm ci`, `npm run lint`, `npx tsc --noEmit` |
+
+Two pins worth knowing about:
+
+- **Python 3.12 is deliberate, not incidental.** `passlib` still imports the stdlib
+  `crypt` module, which was *removed* in Python 3.13 — bumping the CI runner to 3.13
+  will break the backend job until password hashing moves off `passlib`.
+- **`npm ci`, not `npm install`.** It installs strictly from `package-lock.json` and
+  fails loudly if the lockfile has drifted from `package.json`, which is what you
+  want in CI (`npm install` would silently resolve new versions instead).
+
+The backend job gets `DATABASE_URL` and `JWT_SECRET` from the workflow's `env:` block
+rather than a `.env` file, so no secrets are needed to run CI — the JWT secret there
+is a throwaway used only for the test run.
 
 ## Frontend setup
 
