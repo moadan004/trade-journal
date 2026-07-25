@@ -3,16 +3,21 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ApiError, getCalendarStats, listAccounts } from "@/lib/api";
+import { ApiError, getCalendarStats, getSummaryStats, listAccounts } from "@/lib/api";
 import { clearToken, getToken } from "@/lib/auth";
 import { formatDateParam, formatMonthParam } from "@/lib/calendar";
+import { getThisMonthRange, getThisWeekRange } from "@/lib/dateRanges";
+import { AppHeader } from "@/components/AppHeader";
 import { CalendarGrid } from "@/components/CalendarGrid";
 import { MonthStatsHeader } from "@/components/MonthStatsHeader";
+import { PeriodSummaryCards } from "@/components/PeriodSummaryCards";
+import { TagFilterInput } from "@/components/TagFilterInput";
 import { DayDetailDrawer } from "@/components/DayDetailDrawer";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import { AccountFormModal } from "@/components/AccountFormModal";
 import type { AccountRead } from "@/types/account";
 import type { CalendarStatsResponse } from "@/types/stats";
+import type { SummaryStatsResponse } from "@/types/summary";
 
 export default function DashboardPage() {
   const router = useRouter();
@@ -22,6 +27,11 @@ export default function DashboardPage() {
   const [stats, setStats] = useState<CalendarStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  const [tags, setTags] = useState<string[]>([]);
+
+  const [weekSummary, setWeekSummary] = useState<SummaryStatsResponse | null>(null);
+  const [monthSummary, setMonthSummary] = useState<SummaryStatsResponse | null>(null);
 
   const [accounts, setAccounts] = useState<AccountRead[]>([]);
   const [accountsLoaded, setAccountsLoaded] = useState(false);
@@ -40,7 +50,7 @@ export default function DashboardPage() {
       return;
     }
 
-    getCalendarStats(monthParam, token)
+    getCalendarStats(monthParam, token, { tags })
       .then((data) => {
         setStats(data);
         setError(null);
@@ -56,7 +66,27 @@ export default function DashboardPage() {
       .finally(() => {
         setLoading(false);
       });
-  }, [monthParam, router]);
+  }, [monthParam, tags, router]);
+
+  const loadPeriodSummaries = useCallback(() => {
+    const token = getToken();
+    if (!token) return;
+
+    const weekRange = getThisWeekRange(today);
+    const monthRange = getThisMonthRange(today);
+
+    Promise.all([
+      getSummaryStats(token, { start: weekRange.start, end: weekRange.end, tags }),
+      getSummaryStats(token, { start: monthRange.start, end: monthRange.end, tags }),
+    ])
+      .then(([week, month]) => {
+        setWeekSummary(week);
+        setMonthSummary(month);
+      })
+      .catch(() => {
+        // non-fatal: the period cards just keep showing the last good numbers
+      });
+  }, [today, tags]);
 
   const loadAccounts = useCallback(() => {
     const token = getToken();
@@ -75,8 +105,17 @@ export default function DashboardPage() {
   }, [loadStats]);
 
   useEffect(() => {
+    loadPeriodSummaries();
+  }, [loadPeriodSummaries]);
+
+  useEffect(() => {
     loadAccounts();
   }, [loadAccounts]);
+
+  function refreshAll() {
+    loadStats();
+    loadPeriodSummaries();
+  }
 
   function goToPrevMonth() {
     setLoading(true);
@@ -98,9 +137,9 @@ export default function DashboardPage() {
     }
   }
 
-  function handleLogout() {
-    clearToken();
-    router.replace("/login");
+  function handleTagsChange(next: string[]) {
+    setLoading(true);
+    setTags(next);
   }
 
   function handleAddTradeClick() {
@@ -125,9 +164,9 @@ export default function DashboardPage() {
 
   return (
     <div className="flex flex-1 flex-col bg-zinc-50">
-      <header className="flex items-center justify-between border-b border-zinc-200 bg-white px-6 py-4">
-        <h1 className="text-lg font-semibold text-zinc-900">Trade Journal</h1>
-        <div className="flex items-center gap-4">
+      <AppHeader
+        active="dashboard"
+        right={
           <button
             type="button"
             onClick={handleAddTradeClick}
@@ -136,25 +175,26 @@ export default function DashboardPage() {
           >
             + Add Trade
           </button>
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-sm text-zinc-500 transition-colors hover:text-zinc-900"
-          >
-            Log out
-          </button>
-        </div>
-      </header>
+        }
+      />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
-        <MonthStatsHeader
-          year={year}
-          month={month}
-          totalPnl={stats?.total_pnl ?? 0}
-          tradingDays={stats?.trading_days ?? 0}
-          onPrev={goToPrevMonth}
-          onNext={goToNextMonth}
-        />
+        <PeriodSummaryCards week={weekSummary} month={monthSummary} />
+
+        <div className="mt-4 max-w-sm">
+          <TagFilterInput tags={tags} onChange={handleTagsChange} />
+        </div>
+
+        <div className="mt-4">
+          <MonthStatsHeader
+            year={year}
+            month={month}
+            totalPnl={stats?.total_pnl ?? 0}
+            tradingDays={stats?.trading_days ?? 0}
+            onPrev={goToPrevMonth}
+            onNext={goToNextMonth}
+          />
+        </div>
 
         {error && (
           <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
@@ -179,7 +219,8 @@ export default function DashboardPage() {
               />
               {!error && stats && stats.trading_days === 0 && (
                 <p className="mt-4 text-center text-sm text-zinc-400">
-                  No trades logged for {monthParam} yet.
+                  No trades logged for {monthParam}
+                  {tags.length > 0 ? " with the selected tags" : ""} yet.
                 </p>
               )}
             </>
@@ -192,7 +233,7 @@ export default function DashboardPage() {
           date={selectedDate}
           accounts={accounts}
           onClose={() => setSelectedDate(null)}
-          onChanged={loadStats}
+          onChanged={refreshAll}
         />
       )}
 
@@ -204,7 +245,7 @@ export default function DashboardPage() {
           onClose={() => setShowAddTrade(false)}
           onSaved={() => {
             setShowAddTrade(false);
-            loadStats();
+            refreshAll();
           }}
         />
       )}

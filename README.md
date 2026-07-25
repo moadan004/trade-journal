@@ -3,9 +3,9 @@
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
-**Status:** Phase 1 (backend foundation), Phase 2 (frontend core: auth pages + calendar
-dashboard), and Phase 3 (trade management: day-detail view, add/edit/delete trades)
-complete. Analytics (Phase 4) and CSV import / polish (Phase 5) are next.
+**Status:** Phase 1 (backend foundation), Phase 2 (frontend core), Phase 3 (trade
+management), and Phase 4 (analytics: equity curve, tag filtering, period summaries)
+complete. CSV import / polish (Phase 5) is next.
 
 ## Stack
 
@@ -76,9 +76,13 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | GET    | `/trades/{id}`                | Get a single trade                        |
 | PUT    | `/trades/{id}`                | Update a trade                            |
 | DELETE | `/trades/{id}`                | Delete a trade                            |
-| GET    | `/stats/calendar?month=YYYY-MM` | Per-day P&L/trade-count/win-rate for a month |
+| GET    | `/stats/calendar?month=YYYY-MM` | Per-day P&L/trade-count/win-rate for a month (optional `account_id`, `tags=`) |
+| GET    | `/stats/summary`              | Aggregate stats + equity curve for an optional `start`/`end`/`account_id`/`tags` range |
 
 All routes except `/auth/*` and `/health` require `Authorization: Bearer <token>`.
+
+`tags` on both stats endpoints is a comma-separated list matched with Postgres array
+overlap (`&&`) — a trade matches if it has **any** of the given tags.
 
 ## Smoke test
 
@@ -112,7 +116,7 @@ npm run dev
 
 The app is now live at `http://localhost:3000`.
 
-### What's built (Phase 2 + 3)
+### What's built (Phase 2 + 3 + 4)
 
 - `/` — landing page, redirects to `/dashboard` if already logged in
 - `/login`, `/register` — call the backend's `/auth/login` and `/auth/register`,
@@ -121,6 +125,8 @@ The app is now live at `http://localhost:3000`.
   on load and on prev/next month navigation; day cells are green/red/gray by P&L sign,
   show P&L/trade count/win rate, and a dot when a day has trades; header shows monthly
   P&L and trading-day count. Loading (skeleton) and empty-month states are handled.
+  Also shows fixed "this week" / "this month" P&L + trade-count cards (independent of
+  which month is navigated to), and a tag filter that recomputes everything on the page.
 - **Day detail** — clicking a day cell opens a modal listing that day's trades
   (symbol, side, entry/exit time, P&L), fetched via `GET /trades?date=YYYY-MM-DD`.
 - **Add trade** — from the dashboard header (`+ Add Trade`) or from the day-detail
@@ -131,8 +137,13 @@ The app is now live at `http://localhost:3000`.
   then opens the trade form.
 - **Edit / delete trade** — from the day-detail modal, `PUT`/`DELETE /trades/{id}`.
   Both refresh the day's trade list and the month's calendar stats afterward.
+- `/analytics` — account selector, date-range presets (last 30/90 days, this month, all
+  time), and the same tag filter as the dashboard. Shows win rate (with W/L/BE
+  breakdown), avg win vs. avg loss, profit factor (gross profit / gross loss, "—" when
+  there are no losing trades in range), and a Recharts equity curve (cumulative P&L,
+  one point per trade, straight segments — no smoothing) built from `GET /stats/summary`.
 
-Analytics (equity curve, tag filtering) and CSV import are Phase 4+ and not implemented yet.
+CSV import and further polish are Phase 5+ and not implemented yet.
 
 ### JWT storage: localStorage vs httpOnly cookie
 

@@ -1,5 +1,6 @@
 import type { AccountCreateInput, AccountRead } from "@/types/account";
 import type { CalendarStatsResponse } from "@/types/stats";
+import type { SummaryStatsResponse } from "@/types/summary";
 import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
@@ -54,8 +55,51 @@ export function login(email: string, password: string): Promise<TokenResponse> {
   });
 }
 
-export function getCalendarStats(month: string, token: string): Promise<CalendarStatsResponse> {
-  return request<CalendarStatsResponse>(`/stats/calendar?month=${month}`, {}, token);
+function buildQuery(params: Record<string, string | number | undefined>): string {
+  const usp = new URLSearchParams();
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") usp.set(key, String(value));
+  });
+  const qs = usp.toString();
+  return qs ? `?${qs}` : "";
+}
+
+interface CalendarStatsFilters {
+  accountId?: number;
+  tags?: string[];
+}
+
+export function getCalendarStats(
+  month: string,
+  token: string,
+  filters: CalendarStatsFilters = {},
+): Promise<CalendarStatsResponse> {
+  const query = buildQuery({
+    month,
+    account_id: filters.accountId,
+    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+  });
+  return request<CalendarStatsResponse>(`/stats/calendar${query}`, {}, token);
+}
+
+interface SummaryStatsFilters {
+  start?: string;
+  end?: string;
+  accountId?: number;
+  tags?: string[];
+}
+
+export function getSummaryStats(
+  token: string,
+  filters: SummaryStatsFilters = {},
+): Promise<SummaryStatsResponse> {
+  const query = buildQuery({
+    start: filters.start,
+    end: filters.end,
+    account_id: filters.accountId,
+    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+  });
+  return request<SummaryStatsResponse>(`/stats/summary${query}`, {}, token);
 }
 
 export function listAccounts(token: string): Promise<AccountRead[]> {
