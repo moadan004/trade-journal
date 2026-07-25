@@ -1,4 +1,5 @@
 import type { AccountCreateInput, AccountRead } from "@/types/account";
+import type { ImportResult } from "@/types/importResult";
 import type { CalendarStatsResponse } from "@/types/stats";
 import type { SummaryStatsResponse } from "@/types/summary";
 import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
@@ -124,4 +125,35 @@ export function updateTrade(id: number, payload: TradeUpdateInput, token: string
 
 export function deleteTrade(id: number, token: string): Promise<void> {
   return request<void>(`/trades/${id}`, { method: "DELETE" }, token);
+}
+
+export async function importTradesCsv(
+  file: File,
+  accountId: number,
+  tag: string | null,
+  token: string,
+): Promise<ImportResult> {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("account_id", String(accountId));
+  if (tag) formData.append("tag", tag);
+
+  const res = await fetch(`${API_URL}/trades/import`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${token}` },
+    body: formData,
+  });
+
+  if (!res.ok) {
+    let message = res.statusText;
+    try {
+      const body = await res.json();
+      if (typeof body.detail === "string") message = body.detail;
+    } catch {
+      // response had no JSON body; fall back to statusText
+    }
+    throw new ApiError(res.status, message);
+  }
+
+  return (await res.json()) as ImportResult;
 }

@@ -32,18 +32,18 @@ export function TagFilterInput({ tags, onChange }: TagFilterInputProps) {
   }
 
   return (
-    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-300 px-2 py-1.5 focus-within:border-zinc-500 focus-within:ring-1 focus-within:ring-zinc-500">
+    <div className="flex flex-wrap items-center gap-1.5 rounded-lg border border-zinc-300 px-2 py-1.5 focus-within:border-zinc-500 focus-within:ring-1 focus-within:ring-zinc-500 dark:border-zinc-700 dark:focus-within:border-zinc-500">
       {tags.map((tag) => (
         <span
           key={tag}
-          className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700"
+          className="flex items-center gap-1 rounded-full bg-zinc-100 px-2 py-0.5 text-xs font-medium text-zinc-700 dark:bg-zinc-800 dark:text-zinc-300"
         >
           {tag}
           <button
             type="button"
             onClick={() => removeTag(tag)}
             aria-label={`Remove tag ${tag}`}
-            className="text-zinc-400 hover:text-zinc-700"
+            className="text-zinc-400 hover:text-zinc-700 dark:text-zinc-500 dark:hover:text-zinc-300"
           >
             ✕
           </button>
@@ -56,7 +56,7 @@ export function TagFilterInput({ tags, onChange }: TagFilterInputProps) {
         onKeyDown={handleKeyDown}
         onBlur={commit}
         placeholder={tags.length === 0 ? "Filter by tag…" : ""}
-        className="min-w-[6rem] flex-1 bg-transparent text-sm text-zinc-900 focus:outline-none"
+        className="min-w-[6rem] flex-1 bg-transparent text-sm text-zinc-900 placeholder:text-zinc-400 focus:outline-none dark:text-zinc-100 dark:placeholder:text-zinc-500"
       />
     </div>
   );

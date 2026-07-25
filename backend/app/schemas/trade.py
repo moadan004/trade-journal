@@ -61,3 +61,14 @@ class TradeRead(BaseModel):
     status: TradeStatus
     created_at: datetime
     updated_at: datetime
+
+
+class ImportSkippedRow(BaseModel):
+    row: int
+    reason: str
+
+
+class ImportResult(BaseModel):
+    total_rows: int
+    imported: int
+    skipped: list[ImportSkippedRow]

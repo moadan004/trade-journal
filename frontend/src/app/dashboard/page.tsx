@@ -15,6 +15,7 @@ import { TagFilterInput } from "@/components/TagFilterInput";
 import { DayDetailDrawer } from "@/components/DayDetailDrawer";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import { AccountFormModal } from "@/components/AccountFormModal";
+import { ImportCsvModal } from "@/components/ImportCsvModal";
 import type { AccountRead } from "@/types/account";
 import type { CalendarStatsResponse } from "@/types/stats";
 import type { SummaryStatsResponse } from "@/types/summary";
@@ -39,6 +40,8 @@ export default function DashboardPage() {
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
   const [showAddTrade, setShowAddTrade] = useState(false);
   const [showAddAccount, setShowAddAccount] = useState(false);
+  const [showImportCsv, setShowImportCsv] = useState(false);
+  const [pendingAction, setPendingAction] = useState<"trade" | "import" | null>(null);
 
   const monthParam = formatMonthParam(year, month);
   const todayParam = formatDateParam(today.getFullYear(), today.getMonth() + 1, today.getDate());
@@ -144,16 +147,31 @@ export default function DashboardPage() {
 
   function handleAddTradeClick() {
     if (accounts.length === 0) {
+      setPendingAction("trade");
       setShowAddAccount(true);
     } else {
       setShowAddTrade(true);
     }
   }
 
+  function handleImportClick() {
+    if (accounts.length === 0) {
+      setPendingAction("import");
+      setShowAddAccount(true);
+    } else {
+      setShowImportCsv(true);
+    }
+  }
+
   function handleAccountCreated(account: AccountRead) {
     setAccounts((prev) => [...prev, account]);
     setShowAddAccount(false);
-    setShowAddTrade(true);
+    if (pendingAction === "import") {
+      setShowImportCsv(true);
+    } else {
+      setShowAddTrade(true);
+    }
+    setPendingAction(null);
   }
 
   const statsByDate = useMemo(() => {
@@ -163,22 +181,32 @@ export default function DashboardPage() {
   }, [stats]);
 
   return (
-    <div className="flex flex-1 flex-col bg-zinc-50">
+    <div className="flex flex-1 flex-col bg-zinc-50 dark:bg-zinc-950">
       <AppHeader
         active="dashboard"
         right={
-          <button
-            type="button"
-            onClick={handleAddTradeClick}
-            disabled={!accountsLoaded}
-            className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50"
-          >
-            + Add Trade
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={handleImportClick}
+              disabled={!accountsLoaded}
+              className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm font-medium text-zinc-700 transition-colors hover:bg-zinc-100 disabled:opacity-50 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
+            >
+              Import CSV
+            </button>
+            <button
+              type="button"
+              onClick={handleAddTradeClick}
+              disabled={!accountsLoaded}
+              className="rounded-lg bg-zinc-900 px-3 py-1.5 text-sm font-medium text-white transition-colors hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
+            >
+              + Add Trade
+            </button>
+          </div>
         }
       />
 
-      <main className="mx-auto w-full max-w-5xl flex-1 px-6 py-8">
+      <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
         <PeriodSummaryCards week={weekSummary} month={monthSummary} />
 
         <div className="mt-4 max-w-sm">
@@ -197,16 +225,19 @@ export default function DashboardPage() {
         </div>
 
         {error && (
-          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700">
+          <div className="mt-4 rounded-lg border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-700 dark:border-red-900/60 dark:bg-red-950/40 dark:text-red-300">
             {error}
           </div>
         )}
 
         <div className="mt-6">
           {loading ? (
-            <div className="grid grid-cols-7 gap-2">
+            <div className="grid grid-cols-7 gap-1 sm:gap-2">
               {Array.from({ length: 35 }).map((_, i) => (
-                <div key={i} className="aspect-square animate-pulse rounded-xl bg-zinc-100" />
+                <div
+                  key={i}
+                  className="aspect-square animate-pulse rounded-lg bg-zinc-100 sm:rounded-xl dark:bg-zinc-800"
+                />
               ))}
             </div>
           ) : (
@@ -216,9 +247,11 @@ export default function DashboardPage() {
                 month={month}
                 statsByDate={statsByDate}
                 onDayClick={setSelectedDate}
+                onSwipeNext={goToNextMonth}
+                onSwipePrev={goToPrevMonth}
               />
               {!error && stats && stats.trading_days === 0 && (
-                <p className="mt-4 text-center text-sm text-zinc-400">
+                <p className="mt-4 text-center text-sm text-zinc-400 dark:text-zinc-500">
                   No trades logged for {monthParam}
                   {tags.length > 0 ? " with the selected tags" : ""} yet.
                 </p>
@@ -252,6 +285,10 @@ export default function DashboardPage() {
 
       {showAddAccount && (
         <AccountFormModal onClose={() => setShowAddAccount(false)} onCreated={handleAccountCreated} />
+      )}
+
+      {showImportCsv && (
+        <ImportCsvModal accounts={accounts} onClose={() => setShowImportCsv(false)} onImported={refreshAll} />
       )}
     </div>
   );

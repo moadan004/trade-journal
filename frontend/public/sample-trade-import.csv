@@ -1,0 +1,4 @@
+Ticket,Open Time,Symbol,Type,Size,Open Price,Close Time,Close Price,Commission,Swap,Profit,Comment
+1001,2026.06.01 09:30:00,XAUUSD,buy,0.10,2350.00,2026.06.01 10:15:00,2360.50,-2.00,0.00,105.00,scalp
+1002,2026.06.03 14:00:00,EURUSD,sell,1.00,1.0850,2026.06.03 15:30:00,1.0870,-1.50,-0.30,-21.80,breakout
+1003,2026.06.10 08:00:00,GBPUSD,buy,0.50,1.2700,2026.06.10 09:00:00,1.2700,-1.00,0.00,-1.00,breakeven-ish

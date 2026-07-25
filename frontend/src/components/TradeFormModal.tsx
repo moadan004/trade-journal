@@ -11,8 +11,8 @@ import type { AccountRead } from "@/types/account";
 import type { TradeRead, TradeSide } from "@/types/trade";
 
 const inputClasses =
-  "mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500";
-const labelClasses = "block text-sm font-medium text-zinc-700";
+  "mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500";
+const labelClasses = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
 
 interface TradeFormModalProps {
   accounts: AccountRead[];
@@ -108,7 +108,7 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
         <div>
           <label className={labelClasses}>Account</label>
           {isEdit ? (
-            <p className="mt-1 text-sm text-zinc-500">
+            <p className="mt-1 text-sm text-zinc-500 dark:text-zinc-400">
               {accounts.find((a) => a.id === trade.account_id)?.name ?? `Account #${trade.account_id}`}
             </p>
           ) : (
@@ -243,7 +243,7 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
             placeholder="scalp, breakout"
             className={inputClasses}
           />
-          <p className="mt-1 text-xs text-zinc-400">Comma-separated.</p>
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Comma-separated.</p>
         </div>
 
         <div>
@@ -259,20 +259,20 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
           />
         </div>
 
-        {error && <p className="text-sm text-red-600">{error}</p>}
+        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
 
         <div className="flex justify-end gap-3 pt-2">
           <button
             type="button"
             onClick={onClose}
-            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100"
+            className="rounded-lg border border-zinc-300 px-4 py-2 text-sm font-medium text-zinc-700 hover:bg-zinc-100 dark:border-zinc-700 dark:text-zinc-300 dark:hover:bg-zinc-800"
           >
             Cancel
           </button>
           <button
             type="submit"
             disabled={saving}
-            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50"
+            className="rounded-lg bg-zinc-900 px-4 py-2 text-sm font-medium text-white hover:bg-zinc-800 disabled:opacity-50 dark:bg-zinc-100 dark:text-zinc-900 dark:hover:bg-zinc-300"
           >
             {saving ? "Saving…" : isEdit ? "Save changes" : "Add trade"}
           </button>

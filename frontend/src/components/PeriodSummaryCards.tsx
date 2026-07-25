@@ -7,7 +7,11 @@ interface PeriodSummaryCardsProps {
 }
 
 function pnlClass(pnl: number): string {
-  return pnl > 0 ? "text-emerald-600" : pnl < 0 ? "text-red-600" : "text-zinc-500";
+  return pnl > 0
+    ? "text-emerald-600 dark:text-emerald-400"
+    : pnl < 0
+      ? "text-red-600 dark:text-red-400"
+      : "text-zinc-500 dark:text-zinc-400";
 }
 
 function formatPnl(pnl: number): string {

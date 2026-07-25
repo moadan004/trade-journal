@@ -1,6 +1,6 @@
 from datetime import date
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -9,7 +9,8 @@ from app.deps import get_current_user
 from app.models.account import Account
 from app.models.trade import Trade
 from app.models.user import User
-from app.schemas.trade import TradeCreate, TradeRead, TradeUpdate
+from app.schemas.trade import ImportResult, TradeCreate, TradeRead, TradeUpdate
+from app.services.csv_import import CsvImportError, parse_trade_history_csv
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 
@@ -41,6 +42,39 @@ def create_trade(
     db.commit()
     db.refresh(trade)
     return trade
+
+
+@router.post("/import", response_model=ImportResult, status_code=status.HTTP_201_CREATED)
+def import_trades_csv(
+    account_id: int = Form(...),
+    tag: str | None = Form(None),
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    _get_owned_account(db, account_id, current_user)
+
+    raw_bytes = file.file.read()
+    try:
+        content = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="File must be UTF-8 encoded CSV.")
+
+    try:
+        parsed = parse_trade_history_csv(content, tag)
+    except CsvImportError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc))
+
+    for parsed_trade in parsed.trades:
+        trade = Trade(account_id=account_id, **parsed_trade.model_dump())
+        db.add(trade)
+    db.commit()
+
+    return ImportResult(
+        total_rows=parsed.total_rows,
+        imported=len(parsed.trades),
+        skipped=parsed.skipped,
+    )
 
 
 @router.get("", response_model=list[TradeRead])

@@ -3,9 +3,9 @@
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
-**Status:** Phase 1 (backend foundation), Phase 2 (frontend core), Phase 3 (trade
-management), and Phase 4 (analytics: equity curve, tag filtering, period summaries)
-complete. CSV import / polish (Phase 5) is next.
+**Status:** All 5 phases from `plan.md` are complete — backend foundation, frontend
+core, trade management, analytics, and Phase 5 polish (CSV import, mobile-responsive
+calendar with swipe navigation, dark mode).
 
 ## Stack
 
@@ -78,11 +78,28 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | DELETE | `/trades/{id}`                | Delete a trade                            |
 | GET    | `/stats/calendar?month=YYYY-MM` | Per-day P&L/trade-count/win-rate for a month (optional `account_id`, `tags=`) |
 | GET    | `/stats/summary`              | Aggregate stats + equity curve for an optional `start`/`end`/`account_id`/`tags` range |
+| POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
 
 All routes except `/auth/*` and `/health` require `Authorization: Bearer <token>`.
 
 `tags` on both stats endpoints is a comma-separated list matched with Postgres array
 overlap (`&&`) — a trade matches if it has **any** of the given tags.
+
+### CSV import format
+
+`POST /trades/import` expects one row per **closed** trade, with distinctly-named
+open/close columns (the common shape for broker/portal "trade history" exports —
+as opposed to the MT5 terminal's raw per-deal log, which reuses `Time`/`Price` for
+both legs and isn't supported directly). Required columns (case-insensitive, common
+aliases accepted): open time, symbol, side/type (`buy`/`sell` or `long`/`short`),
+size/volume, open price, close time, close price, profit. `commission` and `swap`
+are optional and summed into `fees`; `comment` becomes the trade's notes. The
+**broker's `profit` column is trusted directly as P&L** — it isn't recomputed from
+price/size, since accurately valuing forex lot sizes/contract multipliers client-side
+would require pip-value data we don't have. Malformed rows are skipped individually
+with a reason (bad date, unrecognized side, etc.) rather than failing the whole
+import; the response reports `total_rows` / `imported` / `skipped`. See
+`frontend/public/sample-trade-import.csv` for a template.
 
 ## Smoke test
 
@@ -116,7 +133,7 @@ npm run dev
 
 The app is now live at `http://localhost:3000`.
 
-### What's built (Phase 2 + 3 + 4)
+### What's built (Phase 2 + 3 + 4 + 5)
 
 - `/` — landing page, redirects to `/dashboard` if already logged in
 - `/login`, `/register` — call the backend's `/auth/login` and `/auth/register`,
@@ -142,8 +159,16 @@ The app is now live at `http://localhost:3000`.
   breakdown), avg win vs. avg loss, profit factor (gross profit / gross loss, "—" when
   there are no losing trades in range), and a Recharts equity curve (cumulative P&L,
   one point per trade, straight segments — no smoothing) built from `GET /stats/summary`.
-
-CSV import and further polish are Phase 5+ and not implemented yet.
+- **CSV import** — "Import CSV" button on the dashboard (prompts account creation first
+  if you have none yet). Upload a trade-history CSV, optionally tag every imported trade,
+  and see a summary of rows imported vs. skipped (with reasons) before it refreshes your
+  stats. See the CSV import format section above.
+- **Dark mode** — toggle in the header (🌙/☀️). Persisted to `localStorage`, defaults to
+  OS preference on first visit, and applied via a `beforeInteractive` script so there's
+  no flash of the wrong theme on load.
+- **Mobile-responsive calendar** — day cells condense (P&L only, counts/win-rate hidden)
+  below the `sm` breakpoint, and the calendar grid supports touch swipe (left = next
+  month, right = previous) alongside the existing arrow buttons.
 
 ### JWT storage: localStorage vs httpOnly cookie
 
