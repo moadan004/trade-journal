@@ -10,6 +10,7 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    google_client_id: str = "your-client-id.apps.googleusercontent.com"
 
 
 @lru_cache
