@@ -3,7 +3,6 @@
 import { useState, type FormEvent } from "react";
 
 import { ApiError, importTradesCsv } from "@/lib/api";
-import { getToken } from "@/lib/auth";
 import { Modal } from "@/components/Modal";
 import type { AccountRead } from "@/types/account";
 import type { ImportResult } from "@/types/importResult";
@@ -35,11 +34,8 @@ export function ImportCsvModal({ accounts, onClose, onImported }: ImportCsvModal
       return;
     }
 
-    const token = getToken();
-    if (!token) return;
-
     setImporting(true);
-    importTradesCsv(file, accountId, tag.trim() || null, token)
+    importTradesCsv(file, accountId, tag.trim() || null)
       .then((data) => {
         setResult(data);
         onImported();

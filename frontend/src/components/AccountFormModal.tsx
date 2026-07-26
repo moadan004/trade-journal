@@ -3,7 +3,6 @@
 import { useState, type FormEvent } from "react";
 
 import { ApiError, createAccount } from "@/lib/api";
-import { getToken } from "@/lib/auth";
 import { Modal } from "@/components/Modal";
 import type { AccountRead } from "@/types/account";
 
@@ -27,11 +26,8 @@ export function AccountFormModal({ onClose, onCreated }: AccountFormModalProps) 
     e.preventDefault();
     setError(null);
 
-    const token = getToken();
-    if (!token) return;
-
     setSaving(true);
-    createAccount({ name: name.trim(), broker: broker.trim() || null, currency }, token)
+    createAccount({ name: name.trim(), broker: broker.trim() || null, currency })
       .then((account) => onCreated(account))
       .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to create account."))
       .finally(() => setSaving(false));

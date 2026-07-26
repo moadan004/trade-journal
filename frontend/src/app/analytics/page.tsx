@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ApiError, getSummaryStats, listAccounts } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
 import { getPresetRange, type DateRangePreset } from "@/lib/dateRanges";
 import { AppHeader } from "@/components/AppHeader";
 import { EquityCurveChart } from "@/components/EquityCurveChart";
@@ -33,10 +32,7 @@ export default function AnalyticsPage() {
   const [error, setError] = useState<string | null>(null);
 
   const loadAccounts = useCallback(() => {
-    const token = getToken();
-    if (!token) return;
-
-    listAccounts(token)
+    listAccounts()
       .then((data) => setAccounts(data))
       .catch(() => {
         // non-fatal: the account selector just stays "All accounts"
@@ -44,14 +40,10 @@ export default function AnalyticsPage() {
   }, []);
 
   const loadSummary = useCallback(() => {
-    const token = getToken();
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
+    // No pre-flight token check is possible now (the cookie is httpOnly), so an
+    // unauthenticated visitor is detected by this request returning 401.
     const range = getPresetRange(preset, today);
-    getSummaryStats(token, {
+    getSummaryStats({
       start: range.start,
       end: range.end,
       accountId: accountId === "all" ? undefined : accountId,
@@ -63,7 +55,6 @@ export default function AnalyticsPage() {
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          clearToken();
           router.replace("/login");
           return;
         }

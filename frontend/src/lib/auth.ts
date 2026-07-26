@@ -1,14 +1,22 @@
-const TOKEN_KEY = "trade_journal_token";
+import { ApiError, getCurrentUser } from "@/lib/api";
+import type { UserRead } from "@/types/user";
 
-export function getToken(): string | null {
-  if (typeof window === "undefined") return null;
-  return localStorage.getItem(TOKEN_KEY);
-}
+/**
+ * Session helpers.
+ *
+ * The access token now lives in an httpOnly cookie, which JavaScript cannot
+ * read. That means there is no synchronous way to answer "am I signed in?" the
+ * way the old localStorage `getToken()` did - it takes a request to the server.
+ * Anything gating on auth has to await this.
+ */
 
-export function setToken(token: string) {
-  localStorage.setItem(TOKEN_KEY, token);
-}
-
-export function clearToken() {
-  localStorage.removeItem(TOKEN_KEY);
+/** Returns the signed-in user, or null when there is no valid session. */
+export async function fetchSession(): Promise<UserRead | null> {
+  try {
+    return await getCurrentUser();
+  } catch (err) {
+    if (err instanceof ApiError && err.status === 401) return null;
+    // Network failures and 5xx are not "logged out" - let the caller decide.
+    throw err;
+  }
 }

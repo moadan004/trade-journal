@@ -4,15 +4,22 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useEffect } from "react";
 
-import { getToken } from "@/lib/auth";
+import { fetchSession } from "@/lib/auth";
 
 export default function Home() {
   const router = useRouter();
 
   useEffect(() => {
-    if (getToken()) {
-      router.replace("/dashboard");
-    }
+    // Checking for a session now needs a round-trip (the cookie is httpOnly).
+    // The landing page renders immediately either way; a signed-in visitor is
+    // just redirected a moment later.
+    fetchSession()
+      .then((user) => {
+        if (user) router.replace("/dashboard");
+      })
+      .catch(() => {
+        // Can't reach the API - leave the landing page up.
+      });
   }, [router]);
 
   return (

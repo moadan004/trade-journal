@@ -5,7 +5,6 @@ import { useRouter } from "next/navigation";
 import { useState, type FormEvent } from "react";
 
 import { ApiError, register } from "@/lib/api";
-import { setToken } from "@/lib/auth";
 import { GoogleSignInButton } from "@/components/GoogleSignInButton";
 
 export default function RegisterPage() {
@@ -20,8 +19,9 @@ export default function RegisterPage() {
     setError(null);
     setLoading(true);
     try {
-      const { access_token } = await register(email, password);
-      setToken(access_token);
+      // The backend sets the httpOnly auth cookie on this response; there is
+      // nothing for the client to store.
+      await register(email, password);
       router.push("/dashboard");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "Something went wrong. Please try again.");

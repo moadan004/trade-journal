@@ -4,7 +4,7 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import type { ReactNode } from "react";
 
-import { clearToken } from "@/lib/auth";
+import { logout } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface AppHeaderProps {
@@ -16,8 +16,11 @@ export function AppHeader({ active, right }: AppHeaderProps) {
   const router = useRouter();
 
   function handleLogout() {
-    clearToken();
-    router.replace("/login");
+    // The cookie is httpOnly, so only the server can clear it. Navigate away
+    // regardless of the outcome so a failed request can't trap the user here.
+    logout()
+      .catch(() => {})
+      .finally(() => router.replace("/login"));
   }
 
   return (

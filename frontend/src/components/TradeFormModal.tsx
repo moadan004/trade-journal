@@ -3,7 +3,6 @@
 import { useState, type FormEvent } from "react";
 
 import { ApiError, createTrade, updateTrade } from "@/lib/api";
-import { getToken } from "@/lib/auth";
 import { datetimeLocalToIso, toDatetimeLocalValue } from "@/lib/calendar";
 import { computePnl, computeStatus } from "@/lib/pnl";
 import { Modal } from "@/components/Modal";
@@ -67,9 +66,6 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       return;
     }
 
-    const token = getToken();
-    if (!token) return;
-
     const pnl = computePnl(side, entryPriceNum, exitPriceNum, sizeNum);
     const tradeStatus = computeStatus(pnl);
     const tags = tagsInput
@@ -93,8 +89,8 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
 
     setSaving(true);
     const request = isEdit
-      ? updateTrade(trade.id, basePayload, token)
-      : createTrade({ ...basePayload, account_id: accountId, fees: 0 }, token);
+      ? updateTrade(trade.id, basePayload)
+      : createTrade({ ...basePayload, account_id: accountId, fees: 0 });
 
     request
       .then(() => onSaved())

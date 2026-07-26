@@ -4,7 +4,6 @@ import { GoogleLogin, GoogleOAuthProvider, type CredentialResponse } from "@reac
 import { useRouter } from "next/navigation";
 
 import { ApiError, googleAuth } from "@/lib/api";
-import { setToken } from "@/lib/auth";
 
 const GOOGLE_CLIENT_ID = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 const PLACEHOLDER_CLIENT_ID = "your-client-id.apps.googleusercontent.com";
@@ -33,10 +32,8 @@ export function GoogleSignInButton({ onError }: GoogleSignInButtonProps) {
     }
 
     googleAuth(idToken)
-      .then(({ access_token }) => {
-        setToken(access_token);
-        router.push("/dashboard");
-      })
+      // The backend sets the httpOnly auth cookie on this response.
+      .then(() => router.push("/dashboard"))
       .catch((err) => onError(err instanceof ApiError ? err.message : "Google sign-in failed."));
   }
 

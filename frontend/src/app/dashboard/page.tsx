@@ -4,7 +4,6 @@ import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { ApiError, getCalendarStats, getSummaryStats, listAccounts } from "@/lib/api";
-import { clearToken, getToken } from "@/lib/auth";
 import { formatDateParam, formatMonthParam } from "@/lib/calendar";
 import { getThisMonthRange, getThisWeekRange } from "@/lib/dateRanges";
 import { AppHeader } from "@/components/AppHeader";
@@ -47,20 +46,15 @@ export default function DashboardPage() {
   const todayParam = formatDateParam(today.getFullYear(), today.getMonth() + 1, today.getDate());
 
   const loadStats = useCallback(() => {
-    const token = getToken();
-    if (!token) {
-      router.replace("/login");
-      return;
-    }
-
-    getCalendarStats(monthParam, token, { tags })
+    // No pre-flight token check is possible now (the cookie is httpOnly), so an
+    // unauthenticated visitor is detected by this request returning 401.
+    getCalendarStats(monthParam, { tags })
       .then((data) => {
         setStats(data);
         setError(null);
       })
       .catch((err) => {
         if (err instanceof ApiError && err.status === 401) {
-          clearToken();
           router.replace("/login");
           return;
         }
@@ -72,30 +66,25 @@ export default function DashboardPage() {
   }, [monthParam, tags, router]);
 
   const loadPeriodSummaries = useCallback(() => {
-    const token = getToken();
-    if (!token) return;
-
     const weekRange = getThisWeekRange(today);
     const monthRange = getThisMonthRange(today);
 
     Promise.all([
-      getSummaryStats(token, { start: weekRange.start, end: weekRange.end, tags }),
-      getSummaryStats(token, { start: monthRange.start, end: monthRange.end, tags }),
+      getSummaryStats({ start: weekRange.start, end: weekRange.end, tags }),
+      getSummaryStats({ start: monthRange.start, end: monthRange.end, tags }),
     ])
       .then(([week, month]) => {
         setWeekSummary(week);
         setMonthSummary(month);
       })
       .catch(() => {
-        // non-fatal: the period cards just keep showing the last good numbers
+        // non-fatal: the period cards just keep showing the last good numbers.
+        // A 401 here is handled by loadStats, which drives the redirect.
       });
   }, [today, tags]);
 
   const loadAccounts = useCallback(() => {
-    const token = getToken();
-    if (!token) return;
-
-    listAccounts(token)
+    listAccounts()
       .then((data) => setAccounts(data))
       .catch(() => {
         // non-fatal: worst case the "add trade" button asks to create an account first

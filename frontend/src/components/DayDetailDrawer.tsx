@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteTrade, listTradesByDate } from "@/lib/api";
-import { getToken } from "@/lib/auth";
 import { Modal } from "@/components/Modal";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import type { AccountRead } from "@/types/account";
@@ -28,10 +27,7 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
 
   const load = useCallback(() => {
-    const token = getToken();
-    if (!token) return;
-
-    listTradesByDate(date, token)
+    listTradesByDate(date)
       .then((data) => {
         setTrades(data);
         setError(null);
@@ -51,10 +47,7 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
   }
 
   function handleDelete(id: number) {
-    const token = getToken();
-    if (!token) return;
-
-    deleteTrade(id, token)
+    deleteTrade(id)
       .then(() => {
         setConfirmingId(null);
         load();
