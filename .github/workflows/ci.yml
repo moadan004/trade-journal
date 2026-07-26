@@ -46,8 +46,10 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # passlib still imports the stdlib `crypt` module, which was removed in
-      # Python 3.13 — so this pin is load-bearing, not incidental.
+      # Pinned for reproducibility: passlib 1.7.4 is unmaintained (2020), so we
+      # test against one known-good interpreter rather than tracking the runner
+      # default. 3.13 was verified to work for bcrypt hashing, so this is a
+      # deliberate choice, not a hard constraint - see README.
       - name: Set up Python 3.12
         uses: actions/setup-python@v5
         with:

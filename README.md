@@ -189,9 +189,15 @@ workflow fails if either one does:
 
 Two pins worth knowing about:
 
-- **Python 3.12 is deliberate, not incidental.** `passlib` still imports the stdlib
-  `crypt` module, which was *removed* in Python 3.13 — bumping the CI runner to 3.13
-  will break the backend job until password hashing moves off `passlib`.
+- **Python 3.12 is pinned for reproducibility, not because 3.13 is broken.**
+  `passlib` 1.7.4 is unmaintained (last release 2020) and does reference the stdlib
+  `crypt` module removed in 3.13 — but that import is wrapped in
+  `try/except ImportError`, and we use the bcrypt backend, which doesn't need it.
+  Verified directly on 3.13: hashing succeeds, correct passwords verify, wrong ones
+  are rejected, with `passlib.utils.has_crypt == False`. So 3.13 works; the pin just
+  keeps CI on a single interpreter we actually test rather than following whatever
+  the runner defaults to. (An earlier revision of this file claimed 3.13 would break
+  the backend. That was wrong.)
 - **`npm ci`, not `npm install`.** It installs strictly from `package-lock.json` and
   fails loudly if the lockfile has drifted from `package.json`, which is what you
   want in CI (`npm install` would silently resolve new versions instead).
