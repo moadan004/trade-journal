@@ -12,6 +12,24 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24
     google_client_id: str = "your-client-id.apps.googleusercontent.com"
 
+    # Name of the httpOnly cookie carrying the access token.
+    cookie_name: str = "access_token"
+    # Must be True in production (HTTPS). Left False by default so the cookie
+    # still works over plain http on localhost during development.
+    cookie_secure: bool = False
+    # "lax" is sufficient because production serves the API same-site via a
+    # Vercel rewrite (/api/* -> backend). If the frontend ever calls the backend
+    # cross-site directly, this would need "none" *and* CSRF tokens.
+    cookie_samesite: str = "lax"
+
+    # Comma-separated list of allowed browser origins. Only needed for local
+    # dev (:3000 -> :8000); the production proxy makes requests same-origin.
+    cors_origins: str = "http://localhost:3000"
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
 
 @lru_cache
 def get_settings() -> Settings:

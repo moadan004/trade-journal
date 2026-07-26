@@ -1,13 +1,19 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from app.core.config import get_settings
 from app.routers import accounts, auth, stats, trades
+
+settings = get_settings()
 
 app = FastAPI(title="Trade Journal API", version="0.1.0")
 
+# allow_credentials is required for the auth cookie to be sent. Note that
+# browsers reject wildcard origins when credentials are included, so the
+# allowed origins must always be listed explicitly.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=settings.cors_origin_list,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
