@@ -8,7 +8,7 @@ import { logout } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 interface AppHeaderProps {
-  active: "dashboard" | "analytics";
+  active: "dashboard" | "analytics" | "reviews";
   right?: ReactNode;
 }
 
@@ -47,6 +47,16 @@ export function AppHeader({ active, right }: AppHeaderProps) {
             }
           >
             Analytics
+          </Link>
+          <Link
+            href="/reviews"
+            className={
+              active === "reviews"
+                ? "text-zinc-900 dark:text-zinc-100"
+                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+            }
+          >
+            Reviews
           </Link>
         </nav>
       </div>
