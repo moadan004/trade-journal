@@ -95,8 +95,7 @@ export default function AnalyticsPage() {
         setError(err instanceof Error ? err.message : "Failed to load analytics.");
       })
       .finally(() => setLoading(false));
-  }, [preset, accountId, tags, setupTag, today, router]);
-  }, [preset, accountId, accounts, tags, today, router]);
+  }, [preset, accountId, accounts, tags, setupTag, today, router]);
 
   useEffect(() => {
     loadAccounts();
