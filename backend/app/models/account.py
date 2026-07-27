@@ -4,6 +4,8 @@ from sqlalchemy import DateTime, ForeignKey, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
+from backend.app.models.trade import Trade
+from backend.app.models.user import User
 
 
 class Account(Base):
