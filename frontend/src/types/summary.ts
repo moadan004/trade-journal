@@ -15,6 +15,22 @@ export interface SummaryStatsResponse {
   avg_loss: number;
   profit_factor: number | null;
   equity_curve: EquityPoint[];
+  /** Populated only when account_ids was requested; empty otherwise. */
+  by_account: AccountSummary[];
+}
+
+export interface AccountSummary {
+  account_id: number;
+  account_name: string;
+  trade_count: number;
+  win_count: number;
+  loss_count: number;
+  breakeven_count: number;
+  win_rate: number;
+  total_pnl: number;
+  avg_win: number;
+  avg_loss: number;
+  profit_factor: number | null;
 }
 
 export interface DrawdownPoint {

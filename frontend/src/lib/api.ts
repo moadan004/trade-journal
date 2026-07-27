@@ -114,6 +114,8 @@ interface SummaryStatsFilters {
   end?: string;
   accountId?: number;
   tags?: string[];
+  /** Restricts to these accounts and asks for a per-account breakdown. */
+  accountIds?: number[];
 }
 
 export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<SummaryStatsResponse> {
@@ -123,7 +125,11 @@ export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<Summ
     account_id: filters.accountId,
     tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
   });
-  return request<SummaryStatsResponse>(`/stats/summary${query}`);
+  // account_ids is repeated rather than comma-joined, so it can't go through
+  // buildQuery's single-value map.
+  const repeated = (filters.accountIds ?? []).map((id) => `account_ids=${id}`).join("&");
+  const url = repeated ? `/stats/summary${query ? `${query}&` : "?"}${repeated}` : `/stats/summary${query}`;
+  return request<SummaryStatsResponse>(url);
 }
 
 // /risk and /sessions take exactly the same filters as /summary, so the three
@@ -190,4 +196,64 @@ export async function importTradesCsv(
   if (!res.ok) throw await extractError(res);
 
   return (await res.json()) as ImportResult;
+}
+
+export async function uploadScreenshot(tradeId: number, file: File): Promise<TradeRead> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  // Same reason as importTradesCsv: FormData must set its own multipart
+  // boundary, so this can't go through request().
+  const res = await fetch(`${API_BASE}/trades/${tradeId}/screenshot`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+  });
+
+  if (!res.ok) throw await extractError(res);
+  return (await res.json()) as TradeRead;
+}
+
+export function deleteScreenshot(tradeId: number): Promise<TradeRead> {
+  return request<TradeRead>(`/trades/${tradeId}/screenshot`, { method: "DELETE" });
+}
+
+export interface ExportFilters {
+  start?: string;
+  end?: string;
+  accountId?: number;
+}
+
+/**
+ * Download the filtered trades as a file.
+ *
+ * Fetched rather than linked so the auth cookie and any error response are
+ * handled the same way as everything else - a plain <a download> would render
+ * a JSON 401 body into the saved file without ever reporting a failure.
+ */
+export async function exportTrades(format: "csv" | "pdf", filters: ExportFilters = {}): Promise<void> {
+  const query = buildQuery({
+    format,
+    start: filters.start,
+    end: filters.end,
+    account_id: filters.accountId,
+  });
+
+  const res = await fetch(`${API_BASE}/trades/export${query}`, { credentials: "include" });
+  if (!res.ok) throw await extractError(res);
+
+  const blob = await res.blob();
+  const filename =
+    /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? `trades.${format}`;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoking immediately can cancel the download in some browsers; one tick is
+  // enough for the click to have been dispatched.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }
