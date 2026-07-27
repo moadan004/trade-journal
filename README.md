@@ -91,6 +91,9 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | GET    | `/stats/risk`                 | Max drawdown + drawdown curve, R-multiple histogram, win/loss/current streaks (same filters) |
 | GET    | `/stats/sessions`             | Per-session trade count, win rate and avg P&L, bucketed by entry hour in UTC (same filters) |
 | POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
+| GET    | `/trades/export`              | Download filtered trades as `format=csv` or `format=pdf` (optional `start`/`end`/`account_id`) |
+| POST   | `/trades/{id}/screenshot`     | Attach a chart image (multipart `file`), replacing any existing one |
+| DELETE | `/trades/{id}/screenshot`     | Remove a trade's screenshot |
 
 Also `POST /auth/logout` (clears the auth cookie) and `GET /auth/me` (returns the
 signed-in user, or 401).
@@ -128,6 +131,46 @@ a scratch into a 2-streak.
 Sessions bucket on `entry_time` in UTC (the session is a property of when you took the
 setup): Asian `00–08`, London `08–13`, London/NY overlap `13–16`, New York `16–21`,
 off-hours `21–00`.
+
+### Screenshots
+
+Images are written to `backend/uploads/screenshots/` (gitignored, configurable via
+`UPLOAD_DIR`) and served from a `/uploads` static mount. Both the Next dev server and
+Vercel proxy `/uploads/*` to the backend alongside `/api/*`, so the stored URL stays a
+plain backend-relative path with no frontend routing baked into it.
+
+> ⚠️ **Uploads do not survive a deploy on Render.** The free tier's filesystem is
+> ephemeral — every deploy and every restart wipes it, and `screenshot_url` will then
+> point at a file that no longer exists. This is fine for local use; before relying on
+> it in production, move to a Render persistent disk or S3-compatible storage.
+
+Three things the upload path deliberately doesn't trust:
+
+- **The client's filename.** Stored names are generated (`uuid4().hex` + a whitelisted
+  extension), so `../../` in a filename can't escape the upload directory.
+- **The client's `Content-Type`.** It's trivially forged, and what a browser does with a
+  file depends on its bytes, so the format is sniffed from magic bytes instead.
+- **SVG.** Rejected outright. It can carry `<script>`, and these files are served from the
+  app's own origin, so accepting SVG would turn "upload a screenshot" into stored XSS
+  against yourself. PNG, JPEG, GIF and WebP only, 5MB cap (`MAX_UPLOAD_BYTES`).
+
+### Export
+
+`GET /trades/export?format=csv|pdf`. CSV carries the full record (15 columns, including
+the derived R) and is UTF-8 with a BOM so Excel reads non-ASCII correctly — the same
+encoding the importer accepts. The PDF is a summary artifact rather than an interchange
+format: date, symbol, side, P&L and tags, with a header line of trade count, net P&L and
+win rate. It's built with **reportlab**, which is pure Python — WeasyPrint would drag
+cairo/pango into the Render build.
+
+### Multi-account comparison
+
+`GET /stats/summary` accepts a repeatable `account_ids` parameter. The top-level figures
+stay the combined total across whatever is selected, and `by_account` adds the same
+figures per account. Both go through one shared aggregation function, so the breakdown
+can't drift from the total it decomposes. Accounts with no trades in range still get a
+zeroed entry rather than disappearing. Omitting `account_ids` leaves `by_account` empty,
+so single-account callers see no change.
 
 ### CSV import format
 
@@ -314,6 +357,17 @@ The app is now live at `http://localhost:3000`.
 - **Mobile-responsive calendar** — day cells condense (P&L only, counts/win-rate hidden)
   below the `sm` breakpoint, and the calendar grid supports touch swipe (left = next
   month, right = previous) alongside the existing arrow buttons.
+- **Trade screenshots** — file picker with live preview in the trade form; thumbnail on
+  the trade row in the day drawer, click to enlarge in a lightbox (Escape or click-away
+  to close). A new trade has no id until saved, so the file is staged and uploaded once
+  the trade exists.
+- **Export** — CSV/PDF buttons on `/analytics` carrying the page's current date range and
+  account, so the download matches what's on screen. Fetched rather than linked: a plain
+  `<a download>` would write a JSON 401 body into the saved file and report success.
+- **Account comparison** — a "Compare accounts" option (shown once you have more than one
+  account) renders side-by-side per-account cards with the best and worst performer
+  flagged. Accounts you haven't traded this period keep a card, since that's itself worth
+  seeing.
 
 ### How auth is stored (httpOnly cookie)
 
