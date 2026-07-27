@@ -1,5 +1,6 @@
 from functools import lru_cache
 
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -25,6 +26,22 @@ class Settings(BaseSettings):
     # Comma-separated list of allowed browser origins. Only needed for local
     # dev (:3000 -> :8000); the production proxy makes requests same-origin.
     cors_origins: str = "http://localhost:3000"
+
+    @field_validator("database_url")
+    @classmethod
+    def _normalize_database_url(cls, value: str) -> str:
+        """Coerce a managed-provider URL into the driver form SQLAlchemy needs.
+
+        Render (and Heroku, and others) expose Postgres as `postgres://...`.
+        SQLAlchemy doesn't recognise that scheme at all, and even `postgresql://`
+        would resolve to psycopg2, which isn't installed - we use psycopg 3. Left
+        unnormalized this fails at startup, which is an unpleasant way to discover
+        it mid-deploy, so accept either spelling and rewrite it here.
+        """
+        for prefix in ("postgres://", "postgresql://"):
+            if value.startswith(prefix):
+                return "postgresql+psycopg://" + value[len(prefix) :]
+        return value
 
     @property
     def cors_origin_list(self) -> list[str]:
