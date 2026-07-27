@@ -105,7 +105,7 @@ export function getCalendarStats(
   const query = buildQuery({
     month,
     account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
   });
   return request<CalendarStatsResponse>(`/stats/calendar${query}`);
 }
@@ -121,12 +121,11 @@ interface SummaryStatsFilters {
 }
 
 export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<SummaryStatsResponse> {
-  return request<SummaryStatsResponse>(`/stats/summary${statsQuery(filters)}`);
   const query = buildQuery({
     start: filters.start,
     end: filters.end,
     account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
   });
   // account_ids is repeated rather than comma-joined, so it can't go through
   // buildQuery's single-value map.
@@ -142,7 +141,7 @@ function statsQuery(filters: SummaryStatsFilters): string {
     start: filters.start,
     end: filters.end,
     account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
     setup_tag: filters.setupTag || undefined,
   });
 }
