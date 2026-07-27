@@ -1,0 +1,51 @@
+# Render Blueprint - https://render.com/docs/blueprint-spec
+#
+# Declares the backend web service and its Postgres database so the setup is
+# reviewable in git rather than living only in dashboard clicks. Apply it via
+# Render -> Blueprints -> New Blueprint Instance, pointed at this repo.
+#
+# NOTE: this covers the backend only. The frontend deploys to Vercel, which is
+# configured separately (see the deploy runbook in README.md). Two values must be
+# set by hand after the first Vercel deploy, because the Vercel URL isn't known
+# until then - both are marked `sync: false` below.
+
+databases:
+  - name: trade-journal-db
+    databaseName: trade_journal
+    user: trade_journal
+    plan: free
+
+services:
+  - type: web
+    name: trade-journal-api
+    runtime: python
+    plan: free
+    rootDir: backend
+    buildCommand: pip install -r requirements.txt
+    # Migrations run as a pre-deploy step, not in startCommand. In startCommand
+    # they would re-run on every restart and on every scaled instance; here they
+    # run once per deploy and a failure aborts the deploy instead of crash-looping.
+    preDeployCommand: alembic upgrade head
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      # Render exposes this as postgres://... - app.core.config normalizes the
+      # scheme to postgresql+psycopg:// at load time.
+      - key: DATABASE_URL
+        fromDatabase:
+          name: trade-journal-db
+          property: connectionString
+      - key: JWT_SECRET
+        generateValue: true
+      # Required: the auth cookie must be HTTPS-only in production.
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: COOKIE_SAMESITE
+        value: lax
+      # Set after the first Vercel deploy, once the frontend domain exists.
+      # Same value as the frontend's authorized origin.
+      - key: CORS_ORIGINS
+        sync: false
+      # Same Client ID as the frontend's NEXT_PUBLIC_GOOGLE_CLIENT_ID.
+      - key: GOOGLE_CLIENT_ID
+        sync: false

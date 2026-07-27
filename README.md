@@ -5,10 +5,14 @@
 A trading journal app with a TradeZella-style calendar dashboard (monthly P&L calendar,
 daily win-rate/trade-count cells). See [`plan.md`](./plan.md) for the full build plan.
 
-**Status:** All 5 phases from `plan.md` are complete — backend foundation, frontend
-core, trade management, analytics, and Phase 5 polish (CSV import, mobile-responsive
-calendar with swipe navigation, dark mode) — plus a post-plan addition: Google OAuth
-sign-in alongside the original email/password auth.
+**Status:** Phases 1–5 complete — backend foundation, frontend core, trade management,
+analytics, and polish (CSV import, mobile-responsive calendar with swipe navigation,
+dark mode). Since then: Google OAuth sign-in alongside email/password, and Phase 9A
+moving the JWT into an httpOnly cookie.
+
+Deploy configuration for Phase 9B is in the repo (`render.yaml`, `backend/runtime.txt`,
+and the [Deploying](#deploying) runbook), but **the deploy itself has not been
+performed** — that needs Render/Vercel/Google Cloud account access.
 
 ## Stack
 
@@ -18,9 +22,10 @@ sign-in alongside the original email/password auth.
 ## Repo layout
 
 ```
-/backend    FastAPI app (routers/, models/, schemas/, core/, alembic/)
-/frontend   Next.js app (login/register pages, calendar dashboard)
+/backend    FastAPI app (routers/, models/, schemas/, core/, services/, alembic/)
+/frontend   Next.js app (login/register pages, calendar dashboard, analytics)
 docker-compose.yml   Local Postgres for development
+render.yaml          Render Blueprint: backend web service + Postgres
 plan.md              Full product/build plan
 ```
 
@@ -87,7 +92,13 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | GET    | `/stats/sessions`             | Per-session trade count, win rate and avg P&L, bucketed by entry hour in UTC (same filters) |
 | POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
 
-All routes except `/auth/*` and `/health` require `Authorization: Bearer <token>`.
+Also `POST /auth/logout` (clears the auth cookie) and `GET /auth/me` (returns the
+signed-in user, or 401).
+
+All routes except `/auth/register`, `/auth/login`, `/auth/google`, `/auth/logout` and
+`/health` require authentication. Credentials come from the **httpOnly `access_token`
+cookie**, with an `Authorization: Bearer <token>` header still accepted as a
+transitional fallback — see [How auth is stored](#how-auth-is-stored-httponly-cookie).
 
 `tags` on the stats endpoints is a comma-separated list matched with Postgres array
 overlap (`&&`) — a trade matches if it has **any** of the given tags.
@@ -304,20 +315,38 @@ The app is now live at `http://localhost:3000`.
   below the `sm` breakpoint, and the calendar grid supports touch swipe (left = next
   month, right = previous) alongside the existing arrow buttons.
 
-### JWT storage: localStorage vs httpOnly cookie
+### How auth is stored (httpOnly cookie)
 
-The frontend stores the JWT in `localStorage` and sends it as an `Authorization: Bearer`
-header, matching how the backend's `OAuth2PasswordBearer` dependency already expects it.
+The JWT lives in an **httpOnly cookie**, so JavaScript cannot read it. This replaced
+the original `localStorage` approach in Phase 9A, closing the XSS token-theft exposure
+that earlier revisions of this file documented as an accepted tradeoff.
 
-- **Why not httpOnly cookies:** they're more resistant to XSS (JS can't read the token),
-  but they'd require the backend to set/read cookies (with `SameSite`/`CORS` credential
-  wiring) instead of a bearer header, and CSRF protection since cookies are sent
-  automatically. That's a backend auth change, not just a frontend one.
-- **Tradeoff accepted:** `localStorage` is vulnerable to token theft via XSS (e.g. a
-  malicious dependency or injected script can read it), but it's simple, needs zero
-  backend changes, and works identically whether the frontend and backend are on the
-  same or different origins. Worth revisiting if this app ever handles more sensitive
-  data or takes third-party scripts.
+**The browser only ever talks to the frontend's own origin.** A Next.js rewrite in
+`frontend/next.config.ts` proxies `/api/*` to the backend, which matters more than it
+first appears: Vercel and Render are different registrable domains, so calling the
+backend directly would be *cross-site*, and `SameSite=Lax`/`Strict` cookies are **not
+sent** on cross-site requests — auth would fail silently in production. Keeping it
+same-site means:
+
+- the cookie can stay `SameSite=Lax`
+- **no CSRF token scheme is needed**
+- no CORS is needed in production (the Vercel→backend hop is server-to-server)
+- the backend URL never ships in the client bundle (`BACKEND_ORIGIN` is not `NEXT_PUBLIC_`)
+
+Consequences worth knowing:
+
+- `GET /auth/me` exists because JS can't read the cookie to check for a session, and
+  `POST /auth/logout` exists because JS can't clear one. Logout is intentionally
+  unauthenticated so an already-expired session can still be cleared.
+- Pages no longer pre-check a token before fetching. An unauthenticated visitor is
+  detected by a request returning 401, so there's a brief render before the redirect,
+  and logging out logs a few harmless 401s in the browser console.
+- The cookie's `Max-Age` mirrors `ACCESS_TOKEN_EXPIRE_MINUTES`, so the browser stops
+  sending a token the backend would reject anyway.
+- **Transitional:** the backend still accepts an `Authorization: Bearer` header as a
+  fallback, and still returns `access_token` in auth response bodies, so a browser tab
+  holding a pre-migration token isn't logged out mid-session. When both are present the
+  cookie wins. Both are scheduled for removal once cookies are confirmed in production.
 
 ## Running frontend + backend together
 
@@ -338,6 +367,91 @@ npm run dev
 ```
 
 Then open `http://localhost:3000`, register an account, and you'll land on the
-calendar dashboard. The backend's CORS config already allows `http://localhost:3000`,
-and the frontend's `.env.local` already points at `http://localhost:8000`, so no
-extra wiring is needed for local dev.
+calendar dashboard. No extra wiring is needed for local dev: the frontend's
+`.env.local` sets `BACKEND_ORIGIN=http://localhost:8000` for the `/api/*` proxy, and
+`CORS_ORIGINS` already allows `http://localhost:3000`.
+
+Note that requests appear in devtools as `localhost:3000/api/...`, not
+`localhost:8000/...` — that's the proxy working as intended.
+
+## Deploying
+
+Backend and database on **Render**, frontend on **Vercel**. The backend side is
+declared as code in [`render.yaml`](./render.yaml) so it's reviewable in git rather
+than living only in dashboard clicks.
+
+### Ordering
+
+There's one real dependency: **the frontend needs the backend's URL**, so deploy
+Render first. (There is no dependency in the other direction — production needs no
+CORS, because the browser only talks to Vercel and the Vercel→Render hop is
+server-to-server.)
+
+### 1. Render — backend + Postgres
+
+Render → **Blueprints** → **New Blueprint Instance** → point at this repo. `render.yaml`
+creates the Postgres instance and the `trade-journal-api` web service, wires
+`DATABASE_URL` from the database, generates a `JWT_SECRET`, and sets `COOKIE_SECURE=true`.
+
+Two variables are marked `sync: false` and must be set by hand in the dashboard:
+
+| Variable | Value |
+|---|---|
+| `GOOGLE_CLIENT_ID` | your OAuth Client ID (same value the frontend uses) |
+| `CORS_ORIGINS` | optional — see note below |
+
+Note the URL Render assigns the service, e.g. `https://trade-journal-api.onrender.com`.
+
+Things `render.yaml` already handles that are easy to get wrong by hand:
+
+- **Migrations run as a pre-deploy step**, not in `startCommand`. In the start command
+  they'd re-run on every restart and every scaled instance; as pre-deploy they run once
+  per deploy and a failure aborts the deploy rather than crash-looping the service.
+- **Render exposes Postgres as `postgres://...`**, which SQLAlchemy doesn't accept —
+  and even `postgresql://` would resolve to psycopg2, which isn't installed. The app
+  normalizes either form to `postgresql+psycopg://` at load time
+  (`backend/app/core/config.py`), so no manual URL editing is needed.
+- **`backend/runtime.txt` pins Python 3.12**, so Render doesn't pick a different default.
+
+### 2. Vercel — frontend
+
+Import the repo, then set:
+
+| Setting | Value |
+|---|---|
+| Root directory | `frontend` |
+| `BACKEND_ORIGIN` | the Render URL from step 1 |
+| `NEXT_PUBLIC_GOOGLE_CLIENT_ID` | your OAuth Client ID |
+
+`BACKEND_ORIGIN` deliberately has no `NEXT_PUBLIC_` prefix — it's read only by the
+rewrite at build/server time, keeping the backend URL out of the client bundle.
+
+### 3. Google OAuth
+
+In Google Cloud Console → Credentials → your OAuth client, add the Vercel production
+URL to **Authorized JavaScript origins**. No redirect URI is needed: the flow is
+client-side and posts the resulting ID token to our own backend.
+
+### 4. Optional: `CORS_ORIGINS`
+
+Not required for the proxied setup, since no browser calls Render directly. Set it to
+your Vercel URL only if you also want to hit the API straight from a browser (e.g. for
+debugging). Wildcards are rejected by browsers when credentials are included, so it must
+be explicit if set at all.
+
+### Verify on the live URLs
+
+Deploying isn't done until this passes end-to-end in production:
+
+1. Register a fresh account, then reload — the session should persist (that's `/auth/me`
+   working through the proxy).
+2. Add a trade; confirm it appears on the calendar and on `/analytics`.
+3. Log out; confirm `/dashboard` bounces to `/login`.
+4. In devtools → Application → Cookies, confirm the cookie is flagged **`HttpOnly`** and
+   **`Secure`**, and that **`localStorage` is empty**.
+5. In devtools → Network, confirm requests go to your Vercel origin under `/api/*` and
+   not to the Render domain.
+
+Two things to expect on Render's free tier: the service **spins down when idle**, so the
+first request after a quiet period is slow, and free Postgres has retention/lifetime
+limits — check Render's current terms before trusting it with trade data you care about.
