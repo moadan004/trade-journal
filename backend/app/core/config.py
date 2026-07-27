@@ -27,6 +27,12 @@ class Settings(BaseSettings):
     # dev (:3000 -> :8000); the production proxy makes requests same-origin.
     cors_origins: str = "http://localhost:3000"
 
+    # Where trade screenshots are written. Relative paths resolve against the
+    # backend package root. NOTE: on Render's free tier this is an ephemeral
+    # filesystem - uploads are lost on every deploy and restart. See README.
+    upload_dir: str = "uploads"
+    max_upload_bytes: int = 5 * 1024 * 1024
+
     @field_validator("database_url")
     @classmethod
     def _normalize_database_url(cls, value: str) -> str:

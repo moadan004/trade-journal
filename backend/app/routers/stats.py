@@ -10,6 +10,7 @@ from app.models.account import Account
 from app.models.trade import Trade, TradeStatus
 from app.models.user import User
 from app.schemas.stats import (
+    AccountSummary,
     CalendarStatsResponse,
     DailyStat,
     DrawdownPoint,
@@ -54,16 +55,24 @@ def _filtered_trades(
     end: date | None,
     account_id: int | None,
     tags: str | None,
+    account_ids: list[int] | None = None,
 ) -> list[Trade]:
     """The user's trades under the standard analytics filters, in close order.
 
     Shared by /summary, /risk and /sessions so the three always describe the
     same set of trades - and, because drawdown and streaks are order-dependent,
     the same sequence as the equity curve.
+
+    `account_id` (single) and `account_ids` (multi, for the comparison view) are
+    both supported and intersect when both are given. The join to Account is what
+    scopes results to the caller, so an account_id belonging to someone else
+    simply matches nothing rather than leaking.
     """
     query = db.query(Trade).join(Account).filter(Account.user_id == user.id)
     if account_id is not None:
         query = query.filter(Trade.account_id == account_id)
+    if account_ids:
+        query = query.filter(Trade.account_id.in_(account_ids))
     tags_list = _parse_tags(tags)
     if tags_list:
         query = query.filter(Trade.tags.overlap(tags_list))
@@ -73,6 +82,35 @@ def _filtered_trades(
         query = query.filter(Trade.entry_time < end)
 
     return query.order_by(func.coalesce(Trade.exit_time, Trade.entry_time), Trade.id).all()
+
+
+def _aggregate(trades: list[Trade]) -> dict:
+    """The headline stats for a set of trades.
+
+    Extracted so the combined total and each per-account card are computed by
+    exactly the same code - otherwise the breakdown can drift from the total
+    it's meant to decompose.
+    """
+    trade_count = len(trades)
+    win_count = sum(1 for t in trades if t.status == TradeStatus.win)
+    loss_count = sum(1 for t in trades if t.status == TradeStatus.loss)
+
+    pnls = [float(t.pnl) for t in trades]
+    wins = [p for p in pnls if p > 0]
+    losses = [p for p in pnls if p < 0]
+    gross_loss = abs(sum(losses))
+
+    return {
+        "trade_count": trade_count,
+        "win_count": win_count,
+        "loss_count": loss_count,
+        "breakeven_count": trade_count - win_count - loss_count,
+        "win_rate": (win_count / trade_count) if trade_count else 0.0,
+        "total_pnl": sum(pnls),
+        "avg_win": (sum(wins) / len(wins)) if wins else 0.0,
+        "avg_loss": (sum(losses) / len(losses)) if losses else 0.0,
+        "profit_factor": (sum(wins) / gross_loss) if gross_loss > 0 else None,
+    }
 
 
 @router.get("/calendar", response_model=CalendarStatsResponse)
@@ -132,29 +170,20 @@ def get_summary_stats(
     end: date | None = None,
     account_id: int | None = None,
     tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    account_ids: list[int] | None = Query(
+        None, description="Repeatable; restricts to these accounts and adds a per-account breakdown"
+    ),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+    """Aggregate stats and equity curve.
 
-    trade_count = len(trades)
-    win_count = sum(1 for t in trades if t.status == TradeStatus.win)
-    loss_count = sum(1 for t in trades if t.status == TradeStatus.loss)
-    breakeven_count = trade_count - win_count - loss_count
-
-    pnls = [float(t.pnl) for t in trades]
-    total_pnl = sum(pnls)
-    win_rate = (win_count / trade_count) if trade_count else 0.0
-
-    wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p < 0]
-
-    avg_win = (sum(wins) / len(wins)) if wins else 0.0
-    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
-
-    gross_profit = sum(wins)
-    gross_loss = abs(sum(losses))
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
+    Passing `account_ids` (repeatable) additionally returns `by_account` - the
+    same figures computed per account, for the comparison view. The top-level
+    numbers stay the combined total across whatever is selected, so the response
+    is a superset of what single-account callers already receive.
+    """
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, account_ids)
 
     cumulative = 0.0
     equity_curve: list[EquityPoint] = []
@@ -168,17 +197,27 @@ def get_summary_stats(
             )
         )
 
+    by_account: list[AccountSummary] = []
+    if account_ids:
+        # Names come from a single lookup rather than trade.account per row, and
+        # the query is user-scoped so an id the caller doesn't own is dropped
+        # here instead of appearing as an empty card.
+        owned = (
+            db.query(Account)
+            .filter(Account.user_id == current_user.id, Account.id.in_(account_ids))
+            .order_by(Account.id)
+            .all()
+        )
+        for account in owned:
+            account_trades = [t for t in trades if t.account_id == account.id]
+            by_account.append(
+                AccountSummary(account_id=account.id, account_name=account.name, **_aggregate(account_trades))
+            )
+
     return SummaryStatsResponse(
-        trade_count=trade_count,
-        win_count=win_count,
-        loss_count=loss_count,
-        breakeven_count=breakeven_count,
-        win_rate=win_rate,
-        total_pnl=total_pnl,
-        avg_win=avg_win,
-        avg_loss=avg_loss,
-        profit_factor=profit_factor,
+        **_aggregate(trades),
         equity_curve=equity_curve,
+        by_account=by_account,
     )
 
 

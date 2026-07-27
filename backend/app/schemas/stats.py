@@ -23,6 +23,22 @@ class EquityPoint(BaseModel):
     cumulative_pnl: float
 
 
+class AccountSummary(BaseModel):
+    """One account's slice of a multi-account summary."""
+
+    account_id: int
+    account_name: str
+    trade_count: int
+    win_count: int
+    loss_count: int
+    breakeven_count: int
+    win_rate: float
+    total_pnl: float
+    avg_win: float
+    avg_loss: float
+    profit_factor: float | None
+
+
 class SummaryStatsResponse(BaseModel):
     trade_count: int
     win_count: int
@@ -34,6 +50,9 @@ class SummaryStatsResponse(BaseModel):
     avg_loss: float
     profit_factor: float | None
     equity_curve: list[EquityPoint]
+    # Populated only when account_ids was supplied; empty otherwise, so existing
+    # single-account callers see no change in shape they have to handle.
+    by_account: list[AccountSummary] = []
 
 
 class DrawdownPoint(BaseModel):
