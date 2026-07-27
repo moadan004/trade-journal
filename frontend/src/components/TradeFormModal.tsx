@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 
 import { ApiError, createTrade, updateTrade } from "@/lib/api";
 import { datetimeLocalToIso, toDatetimeLocalValue } from "@/lib/calendar";
+import { CHECKLIST_ITEMS, emptyChecklist, type ChecklistAnswers } from "@/lib/checklist";
 import { computePnl, computeStatus } from "@/lib/pnl";
 import { Modal } from "@/components/Modal";
 import type { AccountRead } from "@/types/account";
@@ -46,6 +47,10 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   const [size, setSize] = useState(trade ? String(trade.size) : "");
   const [riskAmount, setRiskAmount] = useState(trade?.risk_amount != null ? String(trade.risk_amount) : "");
   const [tagsInput, setTagsInput] = useState(trade?.tags?.join(", ") ?? "");
+  const [setupTag, setSetupTag] = useState(trade?.setup_tag ?? "");
+  const [checklist, setChecklist] = useState<ChecklistAnswers>(
+    trade?.checklist_json ? { ...emptyChecklist(), ...trade.checklist_json } : emptyChecklist(),
+  );
   const [notes, setNotes] = useState(trade?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
@@ -79,6 +84,17 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
     if (effectivePnl === null || Number.isNaN(riskNum) || riskNum <= 0) return null;
     return effectivePnl / riskNum;
   })();
+
+  // True if the checklist still matches what was loaded (the trade's saved
+  // answers, or all-unchecked for a trade that never had any). Distinguishes
+  // "user left the checklist alone" from "user explicitly answered no to
+  // everything" - only the latter should turn a null checklist_json into an
+  // explicit all-false record. Otherwise saving a trade for an unrelated edit
+  // (just fixing the symbol, say) would fabricate discipline answers nobody
+  // actually gave.
+  const checklistUnchanged =
+    JSON.stringify(checklist) ===
+    JSON.stringify(trade?.checklist_json ? { ...emptyChecklist(), ...trade.checklist_json } : emptyChecklist());
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -128,6 +144,10 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       risk_amount: riskNum,
       status: tradeStatus,
       tags: tags.length > 0 ? tags : null,
+      setup_tag: setupTag.trim() || null,
+      // Keep the loaded value (often null) unless the checklist was actually
+      // touched; see checklistUnchanged above.
+      checklist_json: checklistUnchanged ? (trade?.checklist_json ?? null) : checklist,
       notes: notes.trim() || null,
     };
 
@@ -300,19 +320,67 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
           </p>
         </div>
 
+        <div className="grid grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="trade-tags" className={labelClasses}>
+              Tags
+            </label>
+            <input
+              id="trade-tags"
+              type="text"
+              value={tagsInput}
+              onChange={(e) => setTagsInput(e.target.value)}
+              placeholder="scalp, breakout"
+              className={inputClasses}
+            />
+            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Comma-separated.</p>
+          </div>
+          <div>
+            <label htmlFor="trade-setup" className={labelClasses}>
+              Setup <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
+            </label>
+            <input
+              id="trade-setup"
+              type="text"
+              list="trade-setup-options"
+              value={setupTag}
+              onChange={(e) => setSetupTag(e.target.value)}
+              placeholder="ORB"
+              className={inputClasses}
+            />
+            {/* Suggestions only - free text is still accepted, since a fixed
+                setup list would block logging a new setup the trader is trying. */}
+            <datalist id="trade-setup-options">
+              <option value="ORB" />
+              <option value="Liquidity sweep" />
+              <option value="Trend continuation" />
+              <option value="Reversal" />
+              <option value="Range breakout" />
+            </datalist>
+            <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+              Which setup this was. One per trade, unlike tags.
+            </p>
+          </div>
+        </div>
+
         <div>
-          <label htmlFor="trade-tags" className={labelClasses}>
-            Tags
-          </label>
-          <input
-            id="trade-tags"
-            type="text"
-            value={tagsInput}
-            onChange={(e) => setTagsInput(e.target.value)}
-            placeholder="scalp, breakout"
-            className={inputClasses}
-          />
-          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">Comma-separated.</p>
+          <label className={labelClasses}>Pre-trade checklist</label>
+          <div className="mt-2 grid grid-cols-1 gap-2 sm:grid-cols-2">
+            {CHECKLIST_ITEMS.map((item) => (
+              <label
+                key={item.key}
+                className="flex items-center gap-2 rounded-lg border border-zinc-200 px-3 py-2 text-sm text-zinc-700 dark:border-zinc-700 dark:text-zinc-300"
+              >
+                <input
+                  type="checkbox"
+                  checked={checklist[item.key] ?? false}
+                  onChange={(e) => setChecklist((prev) => ({ ...prev, [item.key]: e.target.checked }))}
+                  className="h-4 w-4 rounded border-zinc-300 text-zinc-900 focus:ring-zinc-500 dark:border-zinc-600 dark:bg-zinc-800"
+                />
+                {item.label}
+              </label>
+            ))}
+          </div>
         </div>
 
         <div>
