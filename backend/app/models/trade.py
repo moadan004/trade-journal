@@ -2,7 +2,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import DateTime, Enum, ForeignKey, Numeric, String, func
-from sqlalchemy.dialects.postgresql import ARRAY
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -45,7 +45,18 @@ class Trade(Base):
     # set it only when R is known but the dollar risk isn't. See app/services/risk.py.
     r_multiple: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
 
+    # Instrument/context tags, free-form and many-per-trade ("scalp", "london").
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)
+    # The setup traded, exactly one per trade ("ORB", "liquidity sweep"). Kept
+    # separate from `tags` rather than folded into it: "which setup was this" is a
+    # single-valued question, and mixing it into a multi-valued array would make
+    # "group by setup" ambiguous for trades carrying several tags.
+    setup_tag: Mapped[str | None] = mapped_column(String(50), nullable=True, index=True)
+    # Pre-trade discipline checklist, stored as {item_key: bool}. JSONB rather
+    # than columns because the item list is expected to change, and a schema
+    # migration per checklist edit would be absurd; nullable because every trade
+    # logged before Phase 7, and every CSV import, has no answers.
+    checklist_json: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
     notes: Mapped[str | None] = mapped_column(String, nullable=True)
     screenshot_url: Mapped[str | None] = mapped_column(String(500), nullable=True)
     status: Mapped[TradeStatus] = mapped_column(Enum(TradeStatus, name="trade_status"), nullable=False)

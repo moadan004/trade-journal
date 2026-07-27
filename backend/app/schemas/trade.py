@@ -19,6 +19,8 @@ class TradeCreate(BaseModel):
     risk_amount: float | None = None
     r_multiple: float | None = None
     tags: list[str] | None = None
+    setup_tag: str | None = None
+    checklist_json: dict[str, bool] | None = None
     notes: str | None = None
     screenshot_url: str | None = None
     status: TradeStatus
@@ -37,6 +39,8 @@ class TradeUpdate(BaseModel):
     risk_amount: float | None = None
     r_multiple: float | None = None
     tags: list[str] | None = None
+    setup_tag: str | None = None
+    checklist_json: dict[str, bool] | None = None
     notes: str | None = None
     screenshot_url: str | None = None
     status: TradeStatus | None = None
@@ -59,6 +63,8 @@ class TradeRead(BaseModel):
     risk_amount: float | None
     r_multiple: float | None
     tags: list[str] | None
+    setup_tag: str | None
+    checklist_json: dict[str, bool] | None
     notes: str | None
     screenshot_url: str | None
     status: TradeStatus

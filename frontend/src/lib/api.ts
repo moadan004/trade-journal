@@ -1,5 +1,6 @@
 import type { AccountCreateInput, AccountRead } from "@/types/account";
 import type { ImportResult } from "@/types/importResult";
+import type { WeeklyReviewRead } from "@/types/review";
 import type { CalendarStatsResponse } from "@/types/stats";
 import type { RiskStatsResponse, SessionStatsResponse, SummaryStatsResponse } from "@/types/summary";
 import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
@@ -114,16 +115,11 @@ interface SummaryStatsFilters {
   end?: string;
   accountId?: number;
   tags?: string[];
+  setupTag?: string;
 }
 
 export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<SummaryStatsResponse> {
-  const query = buildQuery({
-    start: filters.start,
-    end: filters.end,
-    account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
-  });
-  return request<SummaryStatsResponse>(`/stats/summary${query}`);
+  return request<SummaryStatsResponse>(`/stats/summary${statsQuery(filters)}`);
 }
 
 // /risk and /sessions take exactly the same filters as /summary, so the three
@@ -134,6 +130,7 @@ function statsQuery(filters: SummaryStatsFilters): string {
     end: filters.end,
     account_id: filters.accountId,
     tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    setup_tag: filters.setupTag || undefined,
   });
 }
 
@@ -167,6 +164,19 @@ export function updateTrade(id: number, payload: TradeUpdateInput): Promise<Trad
 
 export function deleteTrade(id: number): Promise<void> {
   return request<void>(`/trades/${id}`, { method: "DELETE" });
+}
+
+/** `date` is any day in the target week; the server normalizes to that week's Monday. */
+export function getWeeklyReview(date: string): Promise<WeeklyReviewRead> {
+  return request<WeeklyReviewRead>(`/reviews/${date}`);
+}
+
+/** Upsert - creates the week's review if it doesn't exist yet, updates it if it does. */
+export function saveWeeklyReview(date: string, reflections: string): Promise<WeeklyReviewRead> {
+  return request<WeeklyReviewRead>(`/reviews/${date}`, {
+    method: "PUT",
+    body: JSON.stringify({ reflections }),
+  });
 }
 
 export async function importTradesCsv(

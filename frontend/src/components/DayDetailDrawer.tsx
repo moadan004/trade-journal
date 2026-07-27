@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteTrade, listTradesByDate } from "@/lib/api";
+import { checklistScore } from "@/lib/checklist";
 import { formatR, tradeR } from "@/lib/risk";
 import { Modal } from "@/components/Modal";
 import { TradeFormModal } from "@/components/TradeFormModal";
@@ -111,9 +112,20 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                     <p className="font-semibold text-zinc-900 dark:text-zinc-100">
                       {trade.symbol}{" "}
                       <span className="font-normal text-zinc-500 dark:text-zinc-400">· {trade.side}</span>
+                      {trade.setup_tag && (
+                        <span className="ml-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                          {trade.setup_tag}
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
                       {formatTime(trade.entry_time)} → {trade.exit_time ? formatTime(trade.exit_time) : "open"}
+                      {trade.checklist_json && (
+                        <span className="ml-2">
+                          · checklist {checklistScore(trade.checklist_json).checked}/
+                          {checklistScore(trade.checklist_json).total}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <p

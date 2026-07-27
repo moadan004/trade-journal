@@ -41,6 +41,7 @@ export default function AnalyticsPage() {
   const [accountId, setAccountId] = useState<number | "all">("all");
   const [preset, setPreset] = useState<DateRangePreset>("30d");
   const [tags, setTags] = useState<string[]>([]);
+  const [setupTag, setSetupTag] = useState("");
   const [summary, setSummary] = useState<SummaryStatsResponse | null>(null);
   const [risk, setRisk] = useState<RiskStatsResponse | null>(null);
   const [sessions, setSessions] = useState<SessionStatsResponse | null>(null);
@@ -67,6 +68,7 @@ export default function AnalyticsPage() {
       end: range.end,
       accountId: accountId === "all" ? undefined : accountId,
       tags,
+      setupTag: setupTag || undefined,
     };
 
     Promise.all([getSummaryStats(filters), getRiskStats(filters), getSessionStats(filters)])
@@ -84,7 +86,7 @@ export default function AnalyticsPage() {
         setError(err instanceof Error ? err.message : "Failed to load analytics.");
       })
       .finally(() => setLoading(false));
-  }, [preset, accountId, tags, today, router]);
+  }, [preset, accountId, tags, setupTag, today, router]);
 
   useEffect(() => {
     loadAccounts();
@@ -107,6 +109,11 @@ export default function AnalyticsPage() {
   function handleTagsChange(next: string[]) {
     setLoading(true);
     setTags(next);
+  }
+
+  function handleSetupTagChange(next: string) {
+    setLoading(true);
+    setSetupTag(next);
   }
 
   return (
@@ -148,6 +155,25 @@ export default function AnalyticsPage() {
           <div className="min-w-[14rem] flex-1">
             <TagFilterInput tags={tags} onChange={handleTagsChange} />
           </div>
+
+          {/* Separate control from the tag filter, matching the model: one
+              setup per trade, so this is a single value rather than a chip list. */}
+          <input
+            type="text"
+            list="analytics-setup-options"
+            value={setupTag}
+            onChange={(e) => handleSetupTagChange(e.target.value)}
+            placeholder="Filter by setup…"
+            aria-label="Filter by setup"
+            className="min-w-[10rem] rounded-lg border border-zinc-300 px-3 py-1.5 text-sm text-zinc-900 placeholder:text-zinc-400 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:placeholder:text-zinc-500"
+          />
+          <datalist id="analytics-setup-options">
+            <option value="ORB" />
+            <option value="Liquidity sweep" />
+            <option value="Trend continuation" />
+            <option value="Reversal" />
+            <option value="Range breakout" />
+          </datalist>
         </div>
 
         {error && (

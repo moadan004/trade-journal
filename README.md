@@ -91,6 +91,9 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | GET    | `/stats/risk`                 | Max drawdown + drawdown curve, R-multiple histogram, win/loss/current streaks (same filters) |
 | GET    | `/stats/sessions`             | Per-session trade count, win rate and avg P&L, bucketed by entry hour in UTC (same filters) |
 | POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
+| GET    | `/reviews/{date}`             | The weekly review covering `date`, or a blank template if none written yet |
+| POST   | `/reviews`                    | Create a weekly review (409 if one already exists for that week) |
+| PUT    | `/reviews/{date}`             | Upsert the weekly review covering `date` |
 
 Also `POST /auth/logout` (clears the auth cookie) and `GET /auth/me` (returns the
 signed-in user, or 401).
@@ -101,7 +104,37 @@ cookie**, with an `Authorization: Bearer <token>` header still accepted as a
 transitional fallback — see [How auth is stored](#how-auth-is-stored-httponly-cookie).
 
 `tags` on the stats endpoints is a comma-separated list matched with Postgres array
-overlap (`&&`) — a trade matches if it has **any** of the given tags.
+overlap (`&&`) — a trade matches if it has **any** of the given tags. `setup_tag` is a
+separate filter matched **exactly**, since a trade has at most one setup.
+
+### Journal & discipline
+
+**`setup_tag`** is the setup traded — one per trade, kept deliberately separate from the
+multi-valued `tags` array. Folding it in would make "group by setup" ambiguous for any
+trade carrying several tags. The form suggests common setups via a datalist but accepts
+free text, so logging a new setup you're trying out isn't blocked.
+
+**`checklist_json`** stores the pre-trade discipline answers as `{item_key: bool}`. JSONB
+rather than four columns because the item list is expected to change and a schema
+migration per checklist edit would be absurd. The four current items live in
+`frontend/src/lib/checklist.ts`.
+
+Both are nullable — trades logged before Phase 7, and every CSV import, have `NULL`. The
+form only sends `checklist_json` when the checkboxes actually changed from what was
+loaded, so editing a trade for an unrelated reason can't fabricate an all-false record of
+discipline answers nobody gave.
+
+**Weekly reviews** are one free-text reflection per user per week, keyed by the **Monday**
+of the week. Every route accepts any date within the target week and normalizes it
+server-side, so Tuesday and Wednesday can't address two different rows; a unique
+constraint on `(user_id, week_start_date)` enforces that in the database, and the `PUT`
+upsert recovers from the race that constraint exists to catch. `GET` returns a blank
+template rather than 404 so the client always has a field to bind to.
+
+> **Known inconsistency:** `/reviews` uses Monday-based weeks (matching the backend),
+> while the dashboard's "this week's P&L" card uses Sunday-based weeks
+> (`getThisWeekRange` in `lib/dateRanges.ts`). Left as-is rather than silently shifting a
+> number that's already on screen; worth unifying deliberately at some point.
 
 ### Risk metrics
 
@@ -314,6 +347,14 @@ The app is now live at `http://localhost:3000`.
 - **Mobile-responsive calendar** — day cells condense (P&L only, counts/win-rate hidden)
   below the `sm` breakpoint, and the calendar grid supports touch swipe (left = next
   month, right = previous) alongside the existing arrow buttons.
+- **Pre-trade checklist and setup tag** — four fixed checkboxes on the trade form saved as
+  `checklist_json`, plus a setup input separate from instrument tags. Day-drawer trade rows
+  show the setup as a pill and a compact checklist score (e.g. "3/4").
+- **`/reviews`** — the week's P&L, win rate and profit factor above a free-text reflections
+  box, with arrow navigation between weeks. Saving is explicit rather than autosave (with
+  an unsaved-changes indicator), so a half-written thought isn't persisted mid-sentence.
+- **Setup filter on `/analytics`** — a single-value input beside the tag filter, matching
+  the one-setup-per-trade model, applied to summary, risk and session panels together.
 
 ### How auth is stored (httpOnly cookie)
 

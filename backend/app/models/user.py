@@ -16,3 +16,6 @@ class User(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     accounts: Mapped[list["Account"]] = relationship(back_populates="user", cascade="all, delete-orphan")
+    weekly_reviews: Mapped[list["WeeklyReview"]] = relationship(
+        back_populates="user", cascade="all, delete-orphan"
+    )

@@ -54,6 +54,7 @@ def _filtered_trades(
     end: date | None,
     account_id: int | None,
     tags: str | None,
+    setup_tag: str | None = None,
 ) -> list[Trade]:
     """The user's trades under the standard analytics filters, in close order.
 
@@ -67,6 +68,10 @@ def _filtered_trades(
     tags_list = _parse_tags(tags)
     if tags_list:
         query = query.filter(Trade.tags.overlap(tags_list))
+    # Exact match, not overlap: unlike `tags`, setup_tag is single-valued per
+    # trade, so there's no "matches any of" case to support.
+    if setup_tag:
+        query = query.filter(Trade.setup_tag == setup_tag)
     if start is not None:
         query = query.filter(Trade.entry_time >= start)
     if end is not None:
@@ -80,6 +85,7 @@ def get_calendar_stats(
     month: str = Query(..., description="Target month in YYYY-MM format"),
     account_id: int | None = None,
     tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    setup_tag: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -105,6 +111,8 @@ def get_calendar_stats(
         query = query.filter(Trade.account_id == account_id)
     if tags_list:
         query = query.filter(Trade.tags.overlap(tags_list))
+    if setup_tag:
+        query = query.filter(Trade.setup_tag == setup_tag)
 
     rows = query.group_by(day_col).order_by(day_col).all()
 
@@ -132,10 +140,11 @@ def get_summary_stats(
     end: date | None = None,
     account_id: int | None = None,
     tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    setup_tag: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
 
     trade_count = len(trades)
     win_count = sum(1 for t in trades if t.status == TradeStatus.win)
@@ -188,6 +197,7 @@ def get_risk_stats(
     end: date | None = None,
     account_id: int | None = None,
     tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    setup_tag: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
@@ -197,7 +207,7 @@ def get_risk_stats(
     with risk data, which is why trades_missing_risk is reported alongside it -
     an R histogram built from 3 of 200 trades is misleading without that number.
     """
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
 
     worst_dd, dd_start, dd_end = risk.max_drawdown(trades)
     buckets, r_values = risk.r_distribution(trades)
@@ -227,11 +237,12 @@ def get_session_stats(
     end: date | None = None,
     account_id: int | None = None,
     tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    setup_tag: str | None = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
     """Performance split by trading session, bucketed on entry_time in UTC."""
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
     return SessionStatsResponse(
         trade_count=len(trades),
         sessions=[SessionStat(**row) for row in risk.session_breakdown(trades)],
