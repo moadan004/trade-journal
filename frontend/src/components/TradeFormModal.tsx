@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { ApiError, createTrade, updateTrade } from "@/lib/api";
+import { ApiError, createTrade, deleteScreenshot, updateTrade, uploadScreenshot } from "@/lib/api";
 import { datetimeLocalToIso, toDatetimeLocalValue } from "@/lib/calendar";
 import { CHECKLIST_ITEMS, emptyChecklist, type ChecklistAnswers } from "@/lib/checklist";
 import { computePnl, computeStatus } from "@/lib/pnl";
@@ -13,6 +13,12 @@ import type { TradeRead, TradeSide } from "@/types/trade";
 const inputClasses =
   "mt-1 w-full rounded-lg border border-zinc-300 px-3 py-2 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100 dark:focus:border-zinc-500";
 const labelClasses = "block text-sm font-medium text-zinc-700 dark:text-zinc-300";
+
+// Mirrors the backend's allow-list. Checked here too so an unsupported file is
+// rejected before it's uploaded, rather than after a round trip. SVG is absent
+// on purpose - see app/services/uploads.py.
+const ACCEPTED_IMAGE_TYPES = ["image/png", "image/jpeg", "image/gif", "image/webp"];
+const MAX_SCREENSHOT_BYTES = 5 * 1024 * 1024;
 
 interface TradeFormModalProps {
   accounts: AccountRead[];
@@ -54,6 +60,51 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   const [notes, setNotes] = useState(trade?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Screenshot state. A new trade has no id yet, so the file is staged here and
+  // uploaded after the trade is saved; editing an existing trade can also just
+  // drop the current image.
+  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
+  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
+  const [existingScreenshot, setExistingScreenshot] = useState(trade?.screenshot_url ?? null);
+  const [removeExisting, setRemoveExisting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Object URLs are leaked memory until revoked. Cleaning up on unmount covers
+  // closing the modal; replacing one mid-session is handled in the picker.
+  useEffect(() => {
+    return () => {
+      if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
+    };
+  }, [screenshotPreview]);
+
+  function handleScreenshotPick(file: File | null) {
+    if (!file) return;
+    if (!ACCEPTED_IMAGE_TYPES.includes(file.type)) {
+      setError("Screenshot must be a PNG, JPEG, GIF or WebP image.");
+      return;
+    }
+    if (file.size > MAX_SCREENSHOT_BYTES) {
+      setError("Screenshot must be 5MB or smaller.");
+      return;
+    }
+    setError(null);
+    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
+    setScreenshotFile(file);
+    setScreenshotPreview(URL.createObjectURL(file));
+    setRemoveExisting(false);
+  }
+
+  function clearScreenshot() {
+    if (screenshotPreview) URL.revokeObjectURL(screenshotPreview);
+    setScreenshotFile(null);
+    setScreenshotPreview(null);
+    if (existingScreenshot) {
+      setExistingScreenshot(null);
+      setRemoveExisting(true);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  }
 
   // True while editing and none of the P&L inputs have been touched.
   //
@@ -157,6 +208,13 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       : createTrade({ ...basePayload, account_id: accountId, fees: 0 });
 
     request
+      .then((saved) => {
+        // The screenshot is a separate call, and for a new trade it can only
+        // happen once the trade exists and has an id.
+        if (screenshotFile) return uploadScreenshot(saved.id, screenshotFile);
+        if (removeExisting) return deleteScreenshot(saved.id);
+        return saved;
+      })
       .then(() => onSaved())
       .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to save trade."))
       .finally(() => setSaving(false));
@@ -381,6 +439,47 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
               </label>
             ))}
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="trade-screenshot" className={labelClasses}>
+            Screenshot <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
+          </label>
+          {screenshotPreview || existingScreenshot ? (
+            <div className="mt-2 flex items-start gap-3">
+              {/* Plain <img>: the source is either a blob: URL or a runtime
+                  upload path, neither of which next/image can optimize. */}
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={screenshotPreview ?? existingScreenshot ?? ""}
+                alt="Trade screenshot preview"
+                className="h-24 w-40 rounded-lg border border-zinc-200 object-cover dark:border-zinc-700"
+              />
+              <div className="flex flex-col gap-1 text-xs">
+                <span className="text-zinc-500 dark:text-zinc-400">
+                  {screenshotFile ? `${screenshotFile.name} (not yet saved)` : "Currently attached"}
+                </span>
+                <button
+                  type="button"
+                  onClick={clearScreenshot}
+                  className="self-start font-medium text-red-600 hover:text-red-800 dark:text-red-400 dark:hover:text-red-300"
+                >
+                  Remove
+                </button>
+              </div>
+            </div>
+          ) : null}
+          <input
+            id="trade-screenshot"
+            ref={fileInputRef}
+            type="file"
+            accept={ACCEPTED_IMAGE_TYPES.join(",")}
+            onChange={(e) => handleScreenshotPick(e.target.files?.[0] ?? null)}
+            className="mt-2 block w-full text-sm text-zinc-600 file:mr-3 file:rounded-lg file:border-0 file:bg-zinc-900 file:px-3 file:py-1.5 file:text-sm file:font-medium file:text-white hover:file:bg-zinc-800 dark:text-zinc-400 dark:file:bg-zinc-100 dark:file:text-zinc-900 dark:hover:file:bg-zinc-300"
+          />
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            PNG, JPEG, GIF or WebP, up to 5MB.
+          </p>
         </div>
 
         <div>

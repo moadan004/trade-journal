@@ -6,6 +6,7 @@ import { deleteTrade, listTradesByDate } from "@/lib/api";
 import { checklistScore } from "@/lib/checklist";
 import { formatR, tradeR } from "@/lib/risk";
 import { Modal } from "@/components/Modal";
+import { ScreenshotLightbox } from "@/components/ScreenshotLightbox";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import type { AccountRead } from "@/types/account";
 import type { TradeRead } from "@/types/trade";
@@ -27,6 +28,7 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
   const [error, setError] = useState<string | null>(null);
   const [formMode, setFormMode] = useState<"add" | TradeRead | null>(null);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const load = useCallback(() => {
     listTradesByDate(date)
@@ -146,6 +148,23 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                   </p>
                 </div>
 
+                {trade.screenshot_url && (
+                  <button
+                    type="button"
+                    onClick={() => setLightboxSrc(trade.screenshot_url)}
+                    aria-label="Enlarge trade screenshot"
+                    className="mt-2 block overflow-hidden rounded-lg border border-zinc-200 transition-opacity hover:opacity-80 dark:border-zinc-700"
+                  >
+                    {/* Runtime upload path; next/image can't optimize it. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={trade.screenshot_url}
+                      alt={`${trade.symbol} chart`}
+                      className="h-20 w-32 object-cover"
+                    />
+                  </button>
+                )}
+
                 <div className="mt-2 flex items-center gap-3 text-xs">
                   <button
                     type="button"
@@ -197,6 +216,8 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
           onSaved={handleSaved}
         />
       )}
+
+      {lightboxSrc && <ScreenshotLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </>
   );
 }

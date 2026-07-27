@@ -6,8 +6,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { ApiError, getRiskStats, getSessionStats, getSummaryStats, listAccounts } from "@/lib/api";
 import { getPresetRange, type DateRangePreset } from "@/lib/dateRanges";
 import { formatR } from "@/lib/risk";
+import { AccountComparison } from "@/components/AccountComparison";
 import { AppHeader } from "@/components/AppHeader";
 import { DrawdownChart } from "@/components/DrawdownChart";
+import { ExportMenu } from "@/components/ExportMenu";
 import { EquityCurveChart } from "@/components/EquityCurveChart";
 import { RDistributionChart } from "@/components/RDistributionChart";
 import { SessionBreakdown } from "@/components/SessionBreakdown";
@@ -38,7 +40,9 @@ export default function AnalyticsPage() {
   const today = useMemo(() => new Date(), []);
 
   const [accounts, setAccounts] = useState<AccountRead[]>([]);
-  const [accountId, setAccountId] = useState<number | "all">("all");
+  // "all" aggregates every account into one set of numbers; "compare" keeps the
+  // same combined totals but also asks for the per-account breakdown.
+  const [accountId, setAccountId] = useState<number | "all" | "compare">("all");
   const [preset, setPreset] = useState<DateRangePreset>("30d");
   const [tags, setTags] = useState<string[]>([]);
   const [setupTag, setSetupTag] = useState("");
@@ -63,15 +67,20 @@ export default function AnalyticsPage() {
     // All three take identical filters and are fetched together so the page can
     // never show a summary from one range next to a session table from another.
     const range = getPresetRange(preset, today);
+    const singleAccount = typeof accountId === "number" ? accountId : undefined;
     const filters = {
       start: range.start,
       end: range.end,
-      accountId: accountId === "all" ? undefined : accountId,
+      accountId: singleAccount,
       tags,
       setupTag: setupTag || undefined,
     };
+    // Only /summary understands account_ids; risk and sessions stay on the
+    // combined set, which is what their panels describe either way.
+    const summaryFilters =
+      accountId === "compare" ? { ...filters, accountIds: accounts.map((a) => a.id) } : filters;
 
-    Promise.all([getSummaryStats(filters), getRiskStats(filters), getSessionStats(filters)])
+    Promise.all([getSummaryStats(summaryFilters), getRiskStats(filters), getSessionStats(filters)])
       .then(([summaryData, riskData, sessionData]) => {
         setSummary(summaryData);
         setRisk(riskData);
@@ -87,6 +96,7 @@ export default function AnalyticsPage() {
       })
       .finally(() => setLoading(false));
   }, [preset, accountId, tags, setupTag, today, router]);
+  }, [preset, accountId, accounts, tags, today, router]);
 
   useEffect(() => {
     loadAccounts();
@@ -101,7 +111,7 @@ export default function AnalyticsPage() {
     setPreset(next);
   }
 
-  function handleAccountChange(next: number | "all") {
+  function handleAccountChange(next: number | "all" | "compare") {
     setLoading(true);
     setAccountId(next);
   }
@@ -124,10 +134,15 @@ export default function AnalyticsPage() {
         <div className="flex flex-col gap-3 rounded-2xl border border-zinc-200 bg-white p-4 sm:flex-row sm:flex-wrap sm:items-center dark:border-zinc-800 dark:bg-zinc-900">
           <select
             value={accountId}
-            onChange={(e) => handleAccountChange(e.target.value === "all" ? "all" : Number(e.target.value))}
+            onChange={(e) => {
+              const raw = e.target.value;
+              handleAccountChange(raw === "all" || raw === "compare" ? raw : Number(raw));
+            }}
+            aria-label="Account"
             className="rounded-lg border border-zinc-300 px-3 py-1.5 text-sm text-zinc-900 focus:border-zinc-500 focus:outline-none focus:ring-1 focus:ring-zinc-500 dark:border-zinc-700 dark:bg-zinc-800 dark:text-zinc-100"
           >
             <option value="all">All accounts</option>
+            {accounts.length > 1 && <option value="compare">Compare accounts</option>}
             {accounts.map((account) => (
               <option key={account.id} value={account.id}>
                 {account.name}
@@ -174,6 +189,17 @@ export default function AnalyticsPage() {
             <option value="Reversal" />
             <option value="Range breakout" />
           </datalist>
+
+          {/* Same date range and account the page is showing, so the download
+              matches what's on screen. Tags aren't part of it - the export
+              endpoint doesn't filter by them. */}
+          <ExportMenu
+            filters={{
+              start: getPresetRange(preset, today).start,
+              end: getPresetRange(preset, today).end,
+              accountId: typeof accountId === "number" ? accountId : undefined,
+            }}
+          />
         </div>
 
         {error && (
@@ -220,6 +246,18 @@ export default function AnalyticsPage() {
                   sub={summary.profit_factor == null ? "no losing trades in range" : undefined}
                 />
               </div>
+
+              {summary.by_account.length > 0 && (
+                <>
+                  <h2 className="mt-8 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                    Account comparison
+                  </h2>
+                  <p className="mt-1 mb-3 text-xs text-zinc-400 dark:text-zinc-500">
+                    The cards below break down the combined totals above; they always sum to them.
+                  </p>
+                  <AccountComparison accounts={summary.by_account} />
+                </>
+              )}
 
               <div className="mt-6 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
                 <div className="mb-4 flex items-center justify-between">
