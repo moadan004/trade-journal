@@ -121,12 +121,11 @@ interface SummaryStatsFilters {
 }
 
 export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<SummaryStatsResponse> {
-  const query = buildQuery({
-    start: filters.start,
-    end: filters.end,
-    account_id: filters.accountId,
-    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
-  });
+  // statsQuery, not a local buildQuery call: it is what carries setup_tag, and
+  // /risk and /sessions already go through it. Building the string separately
+  // here is how summary silently stopped honouring the setup filter while the
+  // other two panels still did.
+  const query = statsQuery(filters);
   // account_ids is repeated rather than comma-joined, so it can't go through
   // buildQuery's single-value map.
   const repeated = (filters.accountIds ?? []).map((id) => `account_ids=${id}`).join("&");

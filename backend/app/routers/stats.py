@@ -185,26 +185,6 @@ def get_summary_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
-
-    trade_count = len(trades)
-    win_count = sum(1 for t in trades if t.status == TradeStatus.win)
-    loss_count = sum(1 for t in trades if t.status == TradeStatus.loss)
-    breakeven_count = trade_count - win_count - loss_count
-
-    pnls = [float(t.pnl) for t in trades]
-    total_pnl = sum(pnls)
-    win_rate = (win_count / trade_count) if trade_count else 0.0
-
-    wins = [p for p in pnls if p > 0]
-    losses = [p for p in pnls if p < 0]
-
-    avg_win = (sum(wins) / len(wins)) if wins else 0.0
-    avg_loss = (sum(losses) / len(losses)) if losses else 0.0
-
-    gross_profit = sum(wins)
-    gross_loss = abs(sum(losses))
-    profit_factor = (gross_profit / gross_loss) if gross_loss > 0 else None
     """Aggregate stats and equity curve.
 
     Passing `account_ids` (repeatable) additionally returns `by_account` - the
@@ -212,7 +192,12 @@ def get_summary_stats(
     numbers stay the combined total across whatever is selected, so the response
     is a superset of what single-account callers already receive.
     """
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags, account_ids)
+    # Both optional filters passed by keyword: they are adjacent optional
+    # parameters of the same arity, so positional args here are one reordering
+    # away from silently filtering on the wrong thing.
+    trades = _filtered_trades(
+        db, current_user, start, end, account_id, tags, setup_tag=setup_tag, account_ids=account_ids
+    )
 
     cumulative = 0.0
     equity_curve: list[EquityPoint] = []
@@ -266,7 +251,7 @@ def get_risk_stats(
     with risk data, which is why trades_missing_risk is reported alongside it -
     an R histogram built from 3 of 200 trades is misleading without that number.
     """
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag=setup_tag)
 
     worst_dd, dd_start, dd_end = risk.max_drawdown(trades)
     buckets, r_values = risk.r_distribution(trades)
@@ -301,7 +286,7 @@ def get_session_stats(
     current_user: User = Depends(get_current_user),
 ):
     """Performance split by trading session, bucketed on entry_time in UTC."""
-    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag)
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags, setup_tag=setup_tag)
     return SessionStatsResponse(
         trade_count=len(trades),
         sessions=[SessionStat(**row) for row in risk.session_breakdown(trades)],
