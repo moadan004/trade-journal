@@ -44,10 +44,20 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   const [entryPrice, setEntryPrice] = useState(trade ? String(trade.entry_price) : "");
   const [exitPrice, setExitPrice] = useState(trade?.exit_price != null ? String(trade.exit_price) : "");
   const [size, setSize] = useState(trade ? String(trade.size) : "");
+  const [riskAmount, setRiskAmount] = useState(trade?.risk_amount != null ? String(trade.risk_amount) : "");
   const [tagsInput, setTagsInput] = useState(trade?.tags?.join(", ") ?? "");
   const [notes, setNotes] = useState(trade?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // Live R for the numbers currently in the form. Shown next to the risk field
+  // so "50" reads as a decision ("that was a 2R winner") rather than as one
+  // more number to fill in. Derived on each render - no state to keep in sync.
+  const previewR = (() => {
+    const [entryNum, exitNum, sizeNum, riskNum] = [entryPrice, exitPrice, size, riskAmount].map(parseFloat);
+    if ([entryNum, exitNum, sizeNum, riskNum].some(Number.isNaN) || riskNum <= 0) return null;
+    return computePnl(side, entryNum, exitNum, sizeNum) / riskNum;
+  })();
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -63,6 +73,16 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
     }
     if (!symbol.trim()) {
       setError("Symbol is required.");
+      return;
+    }
+
+    // Risk is optional, but a value that's present must be usable as a divisor -
+    // the backend silently drops non-positive risk from R stats, so reject it
+    // here rather than letting the trade look recorded but count for nothing.
+    const trimmedRisk = riskAmount.trim();
+    const riskNum = trimmedRisk === "" ? null : parseFloat(trimmedRisk);
+    if (riskNum !== null && (Number.isNaN(riskNum) || riskNum <= 0)) {
+      setError("Risk must be a positive number, or left blank.");
       return;
     }
 
@@ -82,6 +102,7 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       exit_price: exitPriceNum,
       size: sizeNum,
       pnl,
+      risk_amount: riskNum,
       status: tradeStatus,
       tags: tags.length > 0 ? tags : null,
       notes: notes.trim() || null,
@@ -225,6 +246,35 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
               className={inputClasses}
             />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="trade-risk" className={labelClasses}>
+            Risk <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
+          </label>
+          <input
+            id="trade-risk"
+            type="number"
+            step="any"
+            min="0"
+            value={riskAmount}
+            onChange={(e) => setRiskAmount(e.target.value)}
+            placeholder="50"
+            className={inputClasses}
+          />
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            Money at risk from entry to stop. Powers R-multiple analytics
+            {previewR !== null && (
+              <>
+                {" — this trade is "}
+                <span className={previewR >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+                  {previewR >= 0 ? "+" : ""}
+                  {previewR.toFixed(2)}R
+                </span>
+              </>
+            )}
+            .
+          </p>
         </div>
 
         <div>

@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteTrade, listTradesByDate } from "@/lib/api";
+import { formatR, tradeR } from "@/lib/risk";
 import { Modal } from "@/components/Modal";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import type { AccountRead } from "@/types/account";
@@ -125,6 +126,11 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                     }`}
                   >
                     {trade.pnl >= 0 ? "+" : "-"}${Math.abs(trade.pnl).toFixed(2)}
+                    {tradeR(trade) !== null && (
+                      <span className="ml-2 font-normal text-zinc-500 dark:text-zinc-400">
+                        {formatR(tradeR(trade)!)}
+                      </span>
+                    )}
                   </p>
                 </div>
 
