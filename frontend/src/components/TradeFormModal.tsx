@@ -50,13 +50,34 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
+  // True while editing and none of the P&L inputs have been touched.
+  //
+  // P&L is normally derived from side/prices/size, but a CSV-imported trade
+  // carries the broker's own figure, which includes swap and commission and so
+  // won't reproduce from prices alone. Recomputing it on every save meant that
+  // opening a trade purely to backfill its risk amount silently overwrote the
+  // imported P&L - which is exactly the flow Phase 6 asks people to use.
+  const pnlInputsUnchanged =
+    isEdit &&
+    side === trade.side &&
+    entryPrice === String(trade.entry_price) &&
+    exitPrice === (trade.exit_price != null ? String(trade.exit_price) : "") &&
+    size === String(trade.size);
+
+  const effectivePnl = (() => {
+    if (pnlInputsUnchanged) return trade.pnl;
+    const [entryNum, exitNum, sizeNum] = [entryPrice, exitPrice, size].map(parseFloat);
+    if ([entryNum, exitNum, sizeNum].some(Number.isNaN)) return null;
+    return computePnl(side, entryNum, exitNum, sizeNum);
+  })();
+
   // Live R for the numbers currently in the form. Shown next to the risk field
   // so "50" reads as a decision ("that was a 2R winner") rather than as one
   // more number to fill in. Derived on each render - no state to keep in sync.
   const previewR = (() => {
-    const [entryNum, exitNum, sizeNum, riskNum] = [entryPrice, exitPrice, size, riskAmount].map(parseFloat);
-    if ([entryNum, exitNum, sizeNum, riskNum].some(Number.isNaN) || riskNum <= 0) return null;
-    return computePnl(side, entryNum, exitNum, sizeNum) / riskNum;
+    const riskNum = parseFloat(riskAmount);
+    if (effectivePnl === null || Number.isNaN(riskNum) || riskNum <= 0) return null;
+    return effectivePnl / riskNum;
   })();
 
   function handleSubmit(e: FormEvent) {
@@ -86,8 +107,10 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       return;
     }
 
-    const pnl = computePnl(side, entryPriceNum, exitPriceNum, sizeNum);
-    const tradeStatus = computeStatus(pnl);
+    // Keep the stored P&L when nothing that feeds it was edited; see
+    // pnlInputsUnchanged above.
+    const pnl = pnlInputsUnchanged ? trade.pnl : computePnl(side, entryPriceNum, exitPriceNum, sizeNum);
+    const tradeStatus = pnlInputsUnchanged ? trade.status : computeStatus(pnl);
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
