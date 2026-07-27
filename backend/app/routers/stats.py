@@ -9,7 +9,19 @@ from app.deps import get_current_user
 from app.models.account import Account
 from app.models.trade import Trade, TradeStatus
 from app.models.user import User
-from app.schemas.stats import CalendarStatsResponse, DailyStat, EquityPoint, SummaryStatsResponse
+from app.schemas.stats import (
+    CalendarStatsResponse,
+    DailyStat,
+    DrawdownPoint,
+    EquityPoint,
+    RBucket,
+    RiskStatsResponse,
+    SessionStat,
+    SessionStatsResponse,
+    StreakInfo,
+    SummaryStatsResponse,
+)
+from app.services import risk
 
 router = APIRouter(prefix="/stats", tags=["stats"])
 
@@ -33,6 +45,34 @@ def _parse_tags(tags: str | None) -> list[str] | None:
         return None
     parsed = [t.strip() for t in tags.split(",") if t.strip()]
     return parsed or None
+
+
+def _filtered_trades(
+    db: Session,
+    user: User,
+    start: date | None,
+    end: date | None,
+    account_id: int | None,
+    tags: str | None,
+) -> list[Trade]:
+    """The user's trades under the standard analytics filters, in close order.
+
+    Shared by /summary, /risk and /sessions so the three always describe the
+    same set of trades - and, because drawdown and streaks are order-dependent,
+    the same sequence as the equity curve.
+    """
+    query = db.query(Trade).join(Account).filter(Account.user_id == user.id)
+    if account_id is not None:
+        query = query.filter(Trade.account_id == account_id)
+    tags_list = _parse_tags(tags)
+    if tags_list:
+        query = query.filter(Trade.tags.overlap(tags_list))
+    if start is not None:
+        query = query.filter(Trade.entry_time >= start)
+    if end is not None:
+        query = query.filter(Trade.entry_time < end)
+
+    return query.order_by(func.coalesce(Trade.exit_time, Trade.entry_time), Trade.id).all()
 
 
 @router.get("/calendar", response_model=CalendarStatsResponse)
@@ -95,19 +135,7 @@ def get_summary_stats(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-    tags_list = _parse_tags(tags)
-
-    query = db.query(Trade).join(Account).filter(Account.user_id == current_user.id)
-    if account_id is not None:
-        query = query.filter(Trade.account_id == account_id)
-    if tags_list:
-        query = query.filter(Trade.tags.overlap(tags_list))
-    if start is not None:
-        query = query.filter(Trade.entry_time >= start)
-    if end is not None:
-        query = query.filter(Trade.entry_time < end)
-
-    trades = query.order_by(func.coalesce(Trade.exit_time, Trade.entry_time)).all()
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
 
     trade_count = len(trades)
     win_count = sum(1 for t in trades if t.status == TradeStatus.win)
@@ -151,4 +179,60 @@ def get_summary_stats(
         avg_loss=avg_loss,
         profit_factor=profit_factor,
         equity_curve=equity_curve,
+    )
+
+
+@router.get("/risk", response_model=RiskStatsResponse)
+def get_risk_stats(
+    start: date | None = None,
+    end: date | None = None,
+    account_id: int | None = None,
+    tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Drawdown, R distribution and streaks over the filtered trades.
+
+    Drawdown and streaks use every trade. The R distribution uses only trades
+    with risk data, which is why trades_missing_risk is reported alongside it -
+    an R histogram built from 3 of 200 trades is misleading without that number.
+    """
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+
+    worst_dd, dd_start, dd_end = risk.max_drawdown(trades)
+    buckets, r_values = risk.r_distribution(trades)
+    longest_win, longest_loss, streak_type, streak_count = risk.streaks(trades)
+
+    return RiskStatsResponse(
+        trade_count=len(trades),
+        trades_with_risk=len(r_values),
+        trades_missing_risk=len(trades) - len(r_values),
+        max_drawdown=worst_dd,
+        max_drawdown_start=dd_start,
+        max_drawdown_end=dd_end,
+        drawdown_curve=[DrawdownPoint(**point) for point in risk.drawdown_series(trades)],
+        r_multiple_distribution=[RBucket(label=label, count=count) for label, count in buckets],
+        avg_r=(sum(r_values) / len(r_values)) if r_values else None,
+        best_r=max(r_values) if r_values else None,
+        worst_r=min(r_values) if r_values else None,
+        longest_win_streak=longest_win,
+        longest_loss_streak=longest_loss,
+        current_streak=StreakInfo(type=streak_type, count=streak_count),
+    )
+
+
+@router.get("/sessions", response_model=SessionStatsResponse)
+def get_session_stats(
+    start: date | None = None,
+    end: date | None = None,
+    account_id: int | None = None,
+    tags: str | None = Query(None, description="Comma-separated tags; matches trades with any of them"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Performance split by trading session, bucketed on entry_time in UTC."""
+    trades = _filtered_trades(db, current_user, start, end, account_id, tags)
+    return SessionStatsResponse(
+        trade_count=len(trades),
+        sessions=[SessionStat(**row) for row in risk.session_breakdown(trades)],
     )
