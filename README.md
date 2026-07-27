@@ -88,6 +88,8 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | DELETE | `/trades/{id}`                | Delete a trade                            |
 | GET    | `/stats/calendar?month=YYYY-MM` | Per-day P&L/trade-count/win-rate for a month (optional `account_id`, `tags=`) |
 | GET    | `/stats/summary`              | Aggregate stats + equity curve for an optional `start`/`end`/`account_id`/`tags` range |
+| GET    | `/stats/risk`                 | Max drawdown + drawdown curve, R-multiple histogram, win/loss/current streaks (same filters) |
+| GET    | `/stats/sessions`             | Per-session trade count, win rate and avg P&L, bucketed by entry hour in UTC (same filters) |
 | POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
 
 Also `POST /auth/logout` (clears the auth cookie) and `GET /auth/me` (returns the
@@ -98,8 +100,34 @@ All routes except `/auth/register`, `/auth/login`, `/auth/google`, `/auth/logout
 cookie**, with an `Authorization: Bearer <token>` header still accepted as a
 transitional fallback — see [How auth is stored](#how-auth-is-stored-httponly-cookie).
 
-`tags` on both stats endpoints is a comma-separated list matched with Postgres array
+`tags` on the stats endpoints is a comma-separated list matched with Postgres array
 overlap (`&&`) — a trade matches if it has **any** of the given tags.
+
+### Risk metrics
+
+`risk_amount` on a trade is the money at risk from entry to stop, in account currency.
+It's **nullable** — every trade logged before it existed, and every CSV import (broker
+exports don't carry a risk column), has `NULL`. Add it from the trade form; editing an
+existing trade is the backfill mechanism.
+
+R is **derived on read** as `pnl / risk_amount`, not stored, so it can't drift from the
+P&L it describes. The long-dormant `r_multiple` column is now an explicit override: it
+wins when set, which covers trades where you know R but not the dollar risk. A
+`risk_amount` of zero or less counts as missing rather than being divided by.
+
+Because trades without risk data are simply absent from the R histogram, `/stats/risk`
+returns `trades_with_risk` and `trades_missing_risk` alongside it, and the UI shows both
+— an R distribution built from 3 of 200 trades is easy to over-read without that count.
+
+Drawdown is measured on cumulative P&L starting at zero, not on account balance: the app
+never records a starting balance or deposits. A losing first trade is therefore in
+drawdown immediately. Streaks use trade status in close order, and a breakeven **ends** a
+streak without starting one — treating it as neutral would silently merge two wins around
+a scratch into a 2-streak.
+
+Sessions bucket on `entry_time` in UTC (the session is a property of when you took the
+setup): Asian `00–08`, London `08–13`, London/NY overlap `13–16`, New York `16–21`,
+off-hours `21–00`.
 
 ### CSV import format
 
@@ -265,6 +293,17 @@ The app is now live at `http://localhost:3000`.
   breakdown), avg win vs. avg loss, profit factor (gross profit / gross loss, "—" when
   there are no losing trades in range), and a Recharts equity curve (cumulative P&L,
   one point per trade, straight segments — no smoothing) built from `GET /stats/summary`.
+- **Risk section on `/analytics`** — max drawdown, average R (with best/worst), and
+  current streak as stat cards; an underwater drawdown area chart; an R-multiple
+  histogram coloured by win/loss with the count of trades excluded for want of risk
+  data; and a session-breakdown table (a table, not a chart, because the comparison
+  spans three different units). Sessions with no trades stay listed — "I never trade
+  the Asian session" is itself a finding. All three panels are fetched together with
+  identical filters, so they always describe the same set of trades.
+- **Risk on the trade form** — optional `Risk` input with a live R preview. Editing a
+  trade without touching side, prices or size preserves its stored P&L rather than
+  recomputing it, so backfilling risk onto a CSV-imported trade can't overwrite the
+  broker's figure (which includes swap and commission and won't reproduce from prices).
 - **CSV import** — "Import CSV" button on the dashboard (prompts account creation first
   if you have none yet). Upload a trade-history CSV, optionally tag every imported trade,
   and see a summary of rows imported vs. skipped (with reasons) before it refreshes your

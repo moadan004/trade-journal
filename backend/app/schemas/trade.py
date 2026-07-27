@@ -16,6 +16,7 @@ class TradeCreate(BaseModel):
     size: float
     pnl: float = 0
     fees: float = 0
+    risk_amount: float | None = None
     r_multiple: float | None = None
     tags: list[str] | None = None
     notes: str | None = None
@@ -33,6 +34,7 @@ class TradeUpdate(BaseModel):
     size: float | None = None
     pnl: float | None = None
     fees: float | None = None
+    risk_amount: float | None = None
     r_multiple: float | None = None
     tags: list[str] | None = None
     notes: str | None = None
@@ -54,6 +56,7 @@ class TradeRead(BaseModel):
     size: float
     pnl: float
     fees: float
+    risk_amount: float | None
     r_multiple: float | None
     tags: list[str] | None
     notes: str | None

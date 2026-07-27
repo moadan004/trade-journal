@@ -3,14 +3,18 @@
 import { useRouter } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import { ApiError, getSummaryStats, listAccounts } from "@/lib/api";
+import { ApiError, getRiskStats, getSessionStats, getSummaryStats, listAccounts } from "@/lib/api";
 import { getPresetRange, type DateRangePreset } from "@/lib/dateRanges";
+import { formatR } from "@/lib/risk";
 import { AppHeader } from "@/components/AppHeader";
+import { DrawdownChart } from "@/components/DrawdownChart";
 import { EquityCurveChart } from "@/components/EquityCurveChart";
+import { RDistributionChart } from "@/components/RDistributionChart";
+import { SessionBreakdown } from "@/components/SessionBreakdown";
 import { StatCard } from "@/components/StatCard";
 import { TagFilterInput } from "@/components/TagFilterInput";
 import type { AccountRead } from "@/types/account";
-import type { SummaryStatsResponse } from "@/types/summary";
+import type { RiskStatsResponse, SessionStatsResponse, SummaryStatsResponse } from "@/types/summary";
 
 const PRESETS: { value: DateRangePreset; label: string }[] = [
   { value: "30d", label: "Last 30 days" },
@@ -18,6 +22,16 @@ const PRESETS: { value: DateRangePreset; label: string }[] = [
   { value: "this_month", label: "This month" },
   { value: "all_time", label: "All time" },
 ];
+
+function formatShortDate(iso: string): string {
+  return new Date(iso).toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function streakColor(type: "win" | "loss" | "none"): string | undefined {
+  if (type === "win") return "text-emerald-600 dark:text-emerald-400";
+  if (type === "loss") return "text-red-600 dark:text-red-400";
+  return undefined;
+}
 
 export default function AnalyticsPage() {
   const router = useRouter();
@@ -28,6 +42,8 @@ export default function AnalyticsPage() {
   const [preset, setPreset] = useState<DateRangePreset>("30d");
   const [tags, setTags] = useState<string[]>([]);
   const [summary, setSummary] = useState<SummaryStatsResponse | null>(null);
+  const [risk, setRisk] = useState<RiskStatsResponse | null>(null);
+  const [sessions, setSessions] = useState<SessionStatsResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -39,18 +55,25 @@ export default function AnalyticsPage() {
       });
   }, []);
 
-  const loadSummary = useCallback(() => {
+  const loadStats = useCallback(() => {
     // No pre-flight token check is possible now (the cookie is httpOnly), so an
-    // unauthenticated visitor is detected by this request returning 401.
+    // unauthenticated visitor is detected by these requests returning 401.
+    //
+    // All three take identical filters and are fetched together so the page can
+    // never show a summary from one range next to a session table from another.
     const range = getPresetRange(preset, today);
-    getSummaryStats({
+    const filters = {
       start: range.start,
       end: range.end,
       accountId: accountId === "all" ? undefined : accountId,
       tags,
-    })
-      .then((data) => {
-        setSummary(data);
+    };
+
+    Promise.all([getSummaryStats(filters), getRiskStats(filters), getSessionStats(filters)])
+      .then(([summaryData, riskData, sessionData]) => {
+        setSummary(summaryData);
+        setRisk(riskData);
+        setSessions(sessionData);
         setError(null);
       })
       .catch((err) => {
@@ -68,8 +91,8 @@ export default function AnalyticsPage() {
   }, [loadAccounts]);
 
   useEffect(() => {
-    loadSummary();
-  }, [loadSummary]);
+    loadStats();
+  }, [loadStats]);
 
   function handlePresetChange(next: DateRangePreset) {
     setLoading(true);
@@ -190,6 +213,92 @@ export default function AnalyticsPage() {
                 </div>
                 <EquityCurveChart data={summary.equity_curve} />
               </div>
+
+              {risk && (
+                <>
+                  <h2 className="mt-8 text-sm font-semibold text-zinc-900 dark:text-zinc-100">Risk</h2>
+
+                  <div className="mt-3 grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <StatCard
+                      label="Max drawdown"
+                      value={
+                        <span className={risk.max_drawdown > 0 ? "text-red-600 dark:text-red-400" : undefined}>
+                          {risk.max_drawdown > 0 ? `-$${risk.max_drawdown.toFixed(2)}` : "$0.00"}
+                        </span>
+                      }
+                      sub={
+                        risk.max_drawdown_end
+                          ? `peak-to-trough, ending ${formatShortDate(risk.max_drawdown_end)}`
+                          : "never below the starting peak"
+                      }
+                    />
+                    <StatCard
+                      label="Average R"
+                      value={risk.avg_r != null ? formatR(risk.avg_r) : "—"}
+                      sub={
+                        risk.trades_with_risk > 0
+                          ? `best ${formatR(risk.best_r!)} · worst ${formatR(risk.worst_r!)}`
+                          : "no trades with risk recorded"
+                      }
+                    />
+                    <StatCard
+                      label="Current streak"
+                      value={
+                        <span className={streakColor(risk.current_streak.type)}>
+                          {risk.current_streak.type === "none"
+                            ? "—"
+                            : `${risk.current_streak.count} ${risk.current_streak.type === "win" ? "win" : "loss"}${
+                                risk.current_streak.count === 1 ? "" : risk.current_streak.type === "win" ? "s" : "es"
+                              }`}
+                        </span>
+                      }
+                      sub={`best run ${risk.longest_win_streak}W · worst ${risk.longest_loss_streak}L`}
+                    />
+                  </div>
+
+                  <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+                      <h3 className="mb-4 text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                        Drawdown
+                      </h3>
+                      <DrawdownChart data={risk.drawdown_curve} />
+                    </div>
+
+                    <div className="rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+                      <div className="mb-4 flex items-baseline justify-between gap-3">
+                        <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                          R-multiple distribution
+                        </h3>
+                        {/* The excluded count is not a footnote: after a CSV
+                            import most trades have no risk, and a histogram
+                            built from a handful of them is easy to over-read. */}
+                        <p className="text-xs text-zinc-400 dark:text-zinc-500">
+                          {risk.trades_with_risk} of {risk.trade_count} trades
+                          {risk.trades_missing_risk > 0 && ` · ${risk.trades_missing_risk} without risk`}
+                        </p>
+                      </div>
+                      <RDistributionChart
+                        buckets={risk.r_multiple_distribution}
+                        missing={risk.trades_missing_risk}
+                      />
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {sessions && (
+                <div className="mt-4 rounded-2xl border border-zinc-200 bg-white p-5 dark:border-zinc-800 dark:bg-zinc-900">
+                  <div className="mb-4 flex items-baseline justify-between gap-3">
+                    <h3 className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      Session breakdown
+                    </h3>
+                    <p className="text-xs text-zinc-400 dark:text-zinc-500">
+                      by entry time, UTC
+                    </p>
+                  </div>
+                  <SessionBreakdown sessions={sessions.sessions} />
+                </div>
+              )}
             </>
           )
         )}

@@ -1,7 +1,7 @@
 import type { AccountCreateInput, AccountRead } from "@/types/account";
 import type { ImportResult } from "@/types/importResult";
 import type { CalendarStatsResponse } from "@/types/stats";
-import type { SummaryStatsResponse } from "@/types/summary";
+import type { RiskStatsResponse, SessionStatsResponse, SummaryStatsResponse } from "@/types/summary";
 import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
 import type { UserRead } from "@/types/user";
 
@@ -124,6 +124,25 @@ export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<Summ
     tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
   });
   return request<SummaryStatsResponse>(`/stats/summary${query}`);
+}
+
+// /risk and /sessions take exactly the same filters as /summary, so the three
+// analytics panels always describe the same set of trades.
+function statsQuery(filters: SummaryStatsFilters): string {
+  return buildQuery({
+    start: filters.start,
+    end: filters.end,
+    account_id: filters.accountId,
+    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+  });
+}
+
+export function getRiskStats(filters: SummaryStatsFilters = {}): Promise<RiskStatsResponse> {
+  return request<RiskStatsResponse>(`/stats/risk${statsQuery(filters)}`);
+}
+
+export function getSessionStats(filters: SummaryStatsFilters = {}): Promise<SessionStatsResponse> {
+  return request<SessionStatsResponse>(`/stats/sessions${statsQuery(filters)}`);
 }
 
 export function listAccounts(): Promise<AccountRead[]> {

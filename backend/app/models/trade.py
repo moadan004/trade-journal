@@ -36,6 +36,13 @@ class Trade(Base):
     size: Mapped[float] = mapped_column(Numeric(18, 6), nullable=False)
     pnl: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0)
     fees: Mapped[float] = mapped_column(Numeric(18, 2), nullable=False, default=0)
+
+    # Money at risk when the trade was opened (entry -> stop, in account currency).
+    # Nullable: every trade created before Phase 6 - and every CSV import, which
+    # has no risk column - predates this field. Risk stats derive R from it.
+    risk_amount: Mapped[float | None] = mapped_column(Numeric(18, 2), nullable=True)
+    # Explicit R override. Normally left NULL and R is derived as pnl/risk_amount;
+    # set it only when R is known but the dollar risk isn't. See app/services/risk.py.
     r_multiple: Mapped[float | None] = mapped_column(Numeric(10, 4), nullable=True)
 
     tags: Mapped[list[str] | None] = mapped_column(ARRAY(String(50)), nullable=True)

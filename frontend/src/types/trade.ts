@@ -13,6 +13,9 @@ export interface TradeRead {
   size: number;
   pnl: number;
   fees: number;
+  /** Money risked at entry. Null on every trade logged before Phase 6 and on CSV imports. */
+  risk_amount: number | null;
+  /** Explicit R override; normally null, in which case R is derived as pnl / risk_amount. */
   r_multiple: number | null;
   tags: string[] | null;
   notes: string | null;
@@ -33,6 +36,7 @@ export interface TradeCreateInput {
   size: number;
   pnl: number;
   fees?: number;
+  risk_amount?: number | null;
   tags?: string[] | null;
   notes?: string | null;
   status: TradeStatus;

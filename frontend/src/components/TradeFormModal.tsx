@@ -44,10 +44,41 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   const [entryPrice, setEntryPrice] = useState(trade ? String(trade.entry_price) : "");
   const [exitPrice, setExitPrice] = useState(trade?.exit_price != null ? String(trade.exit_price) : "");
   const [size, setSize] = useState(trade ? String(trade.size) : "");
+  const [riskAmount, setRiskAmount] = useState(trade?.risk_amount != null ? String(trade.risk_amount) : "");
   const [tagsInput, setTagsInput] = useState(trade?.tags?.join(", ") ?? "");
   const [notes, setNotes] = useState(trade?.notes ?? "");
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
+
+  // True while editing and none of the P&L inputs have been touched.
+  //
+  // P&L is normally derived from side/prices/size, but a CSV-imported trade
+  // carries the broker's own figure, which includes swap and commission and so
+  // won't reproduce from prices alone. Recomputing it on every save meant that
+  // opening a trade purely to backfill its risk amount silently overwrote the
+  // imported P&L - which is exactly the flow Phase 6 asks people to use.
+  const pnlInputsUnchanged =
+    isEdit &&
+    side === trade.side &&
+    entryPrice === String(trade.entry_price) &&
+    exitPrice === (trade.exit_price != null ? String(trade.exit_price) : "") &&
+    size === String(trade.size);
+
+  const effectivePnl = (() => {
+    if (pnlInputsUnchanged) return trade.pnl;
+    const [entryNum, exitNum, sizeNum] = [entryPrice, exitPrice, size].map(parseFloat);
+    if ([entryNum, exitNum, sizeNum].some(Number.isNaN)) return null;
+    return computePnl(side, entryNum, exitNum, sizeNum);
+  })();
+
+  // Live R for the numbers currently in the form. Shown next to the risk field
+  // so "50" reads as a decision ("that was a 2R winner") rather than as one
+  // more number to fill in. Derived on each render - no state to keep in sync.
+  const previewR = (() => {
+    const riskNum = parseFloat(riskAmount);
+    if (effectivePnl === null || Number.isNaN(riskNum) || riskNum <= 0) return null;
+    return effectivePnl / riskNum;
+  })();
 
   function handleSubmit(e: FormEvent) {
     e.preventDefault();
@@ -66,8 +97,20 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       return;
     }
 
-    const pnl = computePnl(side, entryPriceNum, exitPriceNum, sizeNum);
-    const tradeStatus = computeStatus(pnl);
+    // Risk is optional, but a value that's present must be usable as a divisor -
+    // the backend silently drops non-positive risk from R stats, so reject it
+    // here rather than letting the trade look recorded but count for nothing.
+    const trimmedRisk = riskAmount.trim();
+    const riskNum = trimmedRisk === "" ? null : parseFloat(trimmedRisk);
+    if (riskNum !== null && (Number.isNaN(riskNum) || riskNum <= 0)) {
+      setError("Risk must be a positive number, or left blank.");
+      return;
+    }
+
+    // Keep the stored P&L when nothing that feeds it was edited; see
+    // pnlInputsUnchanged above.
+    const pnl = pnlInputsUnchanged ? trade.pnl : computePnl(side, entryPriceNum, exitPriceNum, sizeNum);
+    const tradeStatus = pnlInputsUnchanged ? trade.status : computeStatus(pnl);
     const tags = tagsInput
       .split(",")
       .map((t) => t.trim())
@@ -82,6 +125,7 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
       exit_price: exitPriceNum,
       size: sizeNum,
       pnl,
+      risk_amount: riskNum,
       status: tradeStatus,
       tags: tags.length > 0 ? tags : null,
       notes: notes.trim() || null,
@@ -225,6 +269,35 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
               className={inputClasses}
             />
           </div>
+        </div>
+
+        <div>
+          <label htmlFor="trade-risk" className={labelClasses}>
+            Risk <span className="font-normal text-zinc-400 dark:text-zinc-500">(optional)</span>
+          </label>
+          <input
+            id="trade-risk"
+            type="number"
+            step="any"
+            min="0"
+            value={riskAmount}
+            onChange={(e) => setRiskAmount(e.target.value)}
+            placeholder="50"
+            className={inputClasses}
+          />
+          <p className="mt-1 text-xs text-zinc-400 dark:text-zinc-500">
+            Money at risk from entry to stop. Powers R-multiple analytics
+            {previewR !== null && (
+              <>
+                {" — this trade is "}
+                <span className={previewR >= 0 ? "text-emerald-600 dark:text-emerald-400" : "text-red-600 dark:text-red-400"}>
+                  {previewR >= 0 ? "+" : ""}
+                  {previewR.toFixed(2)}R
+                </span>
+              </>
+            )}
+            .
+          </p>
         </div>
 
         <div>
