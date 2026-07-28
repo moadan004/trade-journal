@@ -499,9 +499,17 @@ Note the URL Render assigns the service, e.g. `https://trade-journal-api.onrende
 
 Things `render.yaml` already handles that are easy to get wrong by hand:
 
-- **Migrations run as a pre-deploy step**, not in `startCommand`. In the start command
-  they'd re-run on every restart and every scaled instance; as pre-deploy they run once
-  per deploy and a failure aborts the deploy rather than crash-looping the service.
+- **Migrations run in `startCommand`**, chained ahead of uvicorn:
+  `alembic upgrade head && uvicorn ...`. Render's **free tier rejects
+  `preDeployCommand`** ("pre-deploy command is not supported for free tier services"),
+  which is where this otherwise belongs — move it back if you upgrade the plan.
+  Two things to know about the free-tier arrangement: migrations re-run on every start
+  (including the wake-up from idle spin-down, where `alembic upgrade head` is a cheap
+  no-op once the DB is at head), and a failing migration **crash-loops the service**
+  instead of aborting the deploy and leaving the old version serving — so a deploy that
+  never goes healthy means checking the logs for an Alembic error. The `&&` is
+  deliberate: if the migration fails, uvicorn never starts, which beats serving against
+  a schema the code doesn't expect.
 - **Render exposes Postgres as `postgres://...`**, which SQLAlchemy doesn't accept —
   and even `postgresql://` would resolve to psycopg2, which isn't installed. The app
   normalizes either form to `postgresql+psycopg://` at load time

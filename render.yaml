@@ -22,11 +22,26 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    # Migrations run as a pre-deploy step, not in startCommand. In startCommand
-    # they would re-run on every restart and on every scaled instance; here they
-    # run once per deploy and a failure aborts the deploy instead of crash-looping.
-    preDeployCommand: alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Migrations run in startCommand because Render's free tier rejects
+    # preDeployCommand ("pre-deploy command is not supported for free tier
+    # services"), which is where this belongs and where it should move if the
+    # service is ever upgraded.
+    #
+    # Consequences of running them here instead:
+    #  - They re-run on every start, including the wake-up from the free tier's
+    #    idle spin-down. `alembic upgrade head` is a no-op once the DB is at head,
+    #    so this costs a connection and a version check, not repeated work.
+    #  - A failing migration now crash-loops the service rather than aborting the
+    #    deploy and leaving the previous version serving. Check the logs on a
+    #    deploy that never turns healthy.
+    #  - `&&` means uvicorn never starts if the migration fails, which is the
+    #    behaviour you want: better down than serving against a schema the code
+    #    doesn't expect.
+    #  - If this service is ever scaled past one instance, every instance runs
+    #    migrations at once. Postgres DDL is transactional and Alembic takes a
+    #    lock, so they serialise rather than corrupt - but single-instance is the
+    #    assumption here, and the free tier enforces it anyway.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
       # Render exposes this as postgres://... - app.core.config normalizes the
