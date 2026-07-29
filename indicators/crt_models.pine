@@ -1,0 +1,438 @@
+//@version=6
+// CRT Models — Candle Range Theory reversal + trend-continuation detector.
+//
+// Module 1 (reversal):     accumulation (Candle 1) → manipulation (bulky candle)
+//                          → market-structure shift → distribution (entry on the retap).
+// Module 2 (continuation): sweep of an "opposite candle" inside a trending pullback,
+//                          filtered to the discount/premium half of the impulse leg.
+//
+// Both modules share the risk block: stop-loss mode, 1:1 partial alert, key-time filter
+// and optional lower-timeframe FVG entry refinement. See indicators/README.md for the
+// rule-by-rule mapping and the known limitations.
+indicator("CRT Models — Reversal + Trend Continuation", shorttitle = "CRT Models", overlay = true, max_boxes_count = 500, max_lines_count = 500, max_labels_count = 500)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Inputs
+// ═══════════════════════════════════════════════════════════════════════════════
+gMod = "Modules"
+useM1          = input.bool(true, "Model 1 — reversal", group = gMod)
+useTC          = input.bool(true, "Trend continuation", group = gMod)
+confirmOnClose = input.bool(true, "Evaluate on bar close only", group = gMod, tooltip = "Recommended. Every CRT rule is a close-based rule, so setup state is only advanced on confirmed bars. Turning this off lets setups form and un-form intrabar.")
+
+gLiq = "Module 1 — Candle 1 (accumulation)"
+useDaily    = input.bool(true,  "Previous day high/low", group = gLiq)
+useWeekly   = input.bool(false, "Previous week high/low", group = gLiq)
+useSwings   = input.bool(true,  "Swing highs/lows (pivot liquidity)", group = gLiq)
+useZoneTap  = input.bool(true,  "Tap of an FVG / order block", group = gLiq)
+liqPivotLen = input.int(5, "Pivot length for swing liquidity", minval = 2, maxval = 50, group = gLiq)
+c1Valid     = input.int(6, "Candle 1 stays valid for (bars)", minval = 1, maxval = 50, group = gLiq, tooltip = "How long the Candle 1 range waits for its manipulation candle before being dropped.")
+
+gBulk = "Module 1 — Model 1 candle (manipulation)"
+atrLen       = input.int(14, "ATR length", minval = 2, group = gBulk)
+bulkyAtrMult = input.float(1.0, "Body ≥ ATR ×", minval = 0.1, step = 0.1, group = gBulk, tooltip = "How 'bulky' the manipulation candle must be, measured body-only against ATR.")
+bulkyBodyPct = input.float(0.5, "Body ≥ % of candle range", minval = 0.1, maxval = 1.0, step = 0.05, group = gBulk, tooltip = "Rejects candles that are large but indecisive (long wicks, small body).")
+zoneExpiry   = input.int(20, "Entry zone stays armed for (bars)", minval = 1, maxval = 200, group = gBulk)
+
+gTC = "Module 2 — Trend continuation"
+tcPivotLen    = input.int(5, "Pivot length for structure", minval = 2, maxval = 50, group = gTC)
+tcRequireDisc = input.bool(true, "Require discount (buys) / premium (sells)", group = gTC, tooltip = "Measured against the 50% of the current impulse leg.")
+
+gLtf = "Lower-timeframe refinement"
+useLtf  = input.bool(true, "Refine entry with an LTF FVG", group = gLtf)
+ltfRes  = input.timeframe("5", "Refinement timeframe", group = gLtf)
+ltfFill = input.string("Proximal", "Entry inside the FVG", options = ["Proximal", "50%", "Distal"], group = gLtf, tooltip = "Proximal = first touch of the gap. Distal = far edge: better price, lower fill rate.")
+
+gRisk = "Risk"
+slMode     = input.string("Aggressive", "Stop loss", options = ["Aggressive", "Conservative"], group = gRisk, tooltip = "Aggressive = just beyond the Model 1 candle body. Conservative ('the soup') = beyond the highest/lowest wick of the whole setup.")
+slBufTicks = input.int(2, "Stop buffer (ticks)", minval = 0, group = gRisk)
+alertAt1R  = input.bool(true, "Alert at 1:1 (close 50%, stop to breakeven)", group = gRisk)
+drawBars   = input.int(20, "Draw entry/SL/TP lines for (bars)", minval = 1, maxval = 400, group = gRisk)
+
+gTime = "Timing filter"
+useSession = input.bool(true, "Only signal during key times", group = gTime)
+sessStr    = input.session("0830-1030", "Key-time window", group = gTime, tooltip = "Default covers the hour before the New York open plus the opening hour.")
+sessTz     = input.string("America/New_York", "Session timezone", group = gTime)
+
+gStyle = "Style"
+showZones     = input.bool(false, "Show FVG / order-block zones", group = gStyle)
+showC1        = input.bool(true,  "Show Candle 1 range", group = gStyle)
+showEntryZone = input.bool(true,  "Show Model 1 entry zone", group = gStyle)
+bullCol       = input.color(#26a69a, "Bullish", inline = "c", group = gStyle)
+bearCol       = input.color(#ef5350, "Bearish", inline = "c", group = gStyle)
+zoneCol       = input.color(color.new(#787b86, 80), "Zones", inline = "c", group = gStyle)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Types
+// ═══════════════════════════════════════════════════════════════════════════════
+// A traded imbalance: a fair value gap, or the order block that produced it.
+type Zone
+    float top
+    float bot
+    bool  bull
+    box   bx
+
+// One Model 1 setup walking through the state machine.
+//   stage 0 = manipulation candle printed, waiting for the close back inside its body
+//   stage 1 = closed inside, waiting for the close beyond its range (MSS)
+//   stage 2 = armed, waiting for price to retap the body and reject out of it
+type Setup
+    int   dir          // +1 long, -1 short
+    int   bulkyBar
+    float bulkyHigh
+    float bulkyLow
+    float bodyHigh
+    float bodyLow
+    int   stage
+    bool  tapped
+    int   armedBar
+    float extreme      // running high (short) / low (long) — the conservative stop
+    box   bx
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Helpers
+// ═══════════════════════════════════════════════════════════════════════════════
+// Only the first bar to trade through a level is the sweep; later bars are not.
+f_clearedUp(float lvl)   => not na(lvl) and high > lvl and high[1] <= lvl
+f_clearedDown(float lvl) => not na(lvl) and low  < lvl and low[1]  >= lvl
+
+tickBuf   = slBufTicks * syminfo.mintick
+atr       = ta.atr(atrLen)
+inSession = not useSession or not na(time(timeframe.period, sessStr, sessTz))
+procBar   = not confirmOnClose or barstate.isconfirmed
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Liquidity references
+// ═══════════════════════════════════════════════════════════════════════════════
+pdh = request.security(syminfo.tickerid, "D", high[1], lookahead = barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  lookahead = barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1], lookahead = barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],  lookahead = barmerge.lookahead_on)
+
+var float lastPH = na
+var float lastPL = na
+phLiq = ta.pivothigh(liqPivotLen, liqPivotLen)
+plLiq = ta.pivotlow(liqPivotLen, liqPivotLen)
+if not na(phLiq)
+    lastPH := phLiq
+if not na(plLiq)
+    lastPL := plLiq
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// FVG + order-block zones — what "taps an OB, breaker or FVG" resolves to
+// ═══════════════════════════════════════════════════════════════════════════════
+var array<Zone> zones = array.new<Zone>()
+
+f_addZone(float top, float bot, bool bull) =>
+    box bx = na
+    if showZones
+        bx := box.new(bar_index, top, bar_index + 1, bot, border_color = zoneCol, bgcolor = zoneCol, extend = extend.right)
+    array.push(zones, Zone.new(top, bot, bull, bx))
+    if array.size(zones) > 20
+        old = array.shift(zones)
+        if not na(old.bx)
+            box.delete(old.bx)
+
+if procBar and useZoneTap
+    // Bullish FVG: bar[2]'s high sits below bar[0]'s low. The candle that opened the gap
+    // is the displacement leg; the last opposite-colour candle behind it is the order block.
+    if low > high[2]
+        f_addZone(low, high[2], true)
+        for j = 2 to 10
+            if close[j] < open[j]
+                f_addZone(high[j], low[j], true)
+                break
+    if high < low[2]
+        f_addZone(low[2], high, false)
+        for j = 2 to 10
+            if close[j] > open[j]
+                f_addZone(high[j], low[j], false)
+                break
+
+// A zone is spent once price closes through it.
+bool tappedZone = false
+if array.size(zones) > 0
+    for i = array.size(zones) - 1 to 0
+        z = array.get(zones, i)
+        if high >= z.bot and low <= z.top
+            tappedZone := true
+        mitigated = z.bull ? close < z.bot : close > z.top
+        if mitigated and procBar
+            if not na(z.bx)
+                box.delete(z.bx)
+            array.remove(zones, i)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module 1 — Candle 1 (accumulation)
+// ═══════════════════════════════════════════════════════════════════════════════
+sweptUp   = (useDaily and f_clearedUp(pdh))   or (useWeekly and f_clearedUp(pwh))   or (useSwings and f_clearedUp(lastPH))
+sweptDn   = (useDaily and f_clearedDown(pdl)) or (useWeekly and f_clearedDown(pwl)) or (useSwings and f_clearedDown(lastPL))
+isCandle1 = sweptUp or sweptDn or (useZoneTap and tappedZone)
+
+var float c1High = na
+var float c1Low  = na
+var int   c1Bar  = na
+var box   c1Box  = na
+
+if procBar and useM1 and isCandle1
+    c1High := high
+    c1Low  := low
+    c1Bar  := bar_index
+    if showC1
+        if not na(c1Box)
+            box.delete(c1Box)
+        c1Box := box.new(bar_index, high, bar_index + c1Valid, low, border_color = color.new(color.gray, 30), border_style = line.style_dashed, bgcolor = color.new(color.gray, 92))
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module 1 — state machine
+// ═══════════════════════════════════════════════════════════════════════════════
+var Setup pend = na
+
+int    sigDir   = 0        // +1 buy, -1 sell
+float  sigEntry = na
+float  sigSL    = na
+string sigName  = ""
+
+// Drops the pending setup, cleaning up its drawing. Returns the na to assign back.
+f_dropPend() =>
+    if not na(pend)
+        if not na(pend.bx)
+            box.delete(pend.bx)
+    Setup empty = na
+    empty
+
+if procBar and not na(pend)
+    // The conservative stop tracks the extreme wick of the whole setup, not just the
+    // manipulation candle.
+    pend.extreme := pend.dir == -1 ? math.max(pend.extreme, high) : math.min(pend.extreme, low)
+    age = bar_index - pend.bulkyBar
+    // A close beyond the manipulation candle's range, against the setup, kills it — in
+    // every stage, before and after confirmation.
+    invalid = pend.dir == -1 ? close > pend.bulkyHigh : close < pend.bulkyLow
+
+    if invalid
+        pend := f_dropPend()
+    else if pend.stage == 0
+        // Confirmation A: the immediate next candle must close inside the body.
+        if age == 1 and close <= pend.bodyHigh and close >= pend.bodyLow
+            pend.stage := 1
+        else if age >= 1
+            pend := f_dropPend()
+    else if pend.stage == 1
+        // Confirmation B: the second or third candle closes beyond the manipulation
+        // range — the market structure shift.
+        mss = pend.dir == -1 ? close < pend.bulkyLow : close > pend.bulkyHigh
+        if mss
+            pend.stage    := 2
+            pend.armedBar := bar_index
+            if showEntryZone
+                pend.bx := box.new(bar_index, pend.bodyHigh, bar_index + zoneExpiry, pend.bodyLow, border_color = pend.dir == 1 ? bullCol : bearCol, bgcolor = color.new(pend.dir == 1 ? bullCol : bearCol, 88))
+        else if age >= 3
+            pend := f_dropPend()
+    else
+        // Armed: wait for price to smack back into the body and reject out of it.
+        if bar_index - pend.armedBar > zoneExpiry
+            pend := f_dropPend()
+        else
+            if (pend.dir == -1 ? high >= pend.bodyLow : low <= pend.bodyHigh)
+                pend.tapped := true
+            rejected = pend.dir == -1 ? close < pend.bodyLow : close > pend.bodyHigh
+            if pend.tapped and rejected and inSession
+                aggr     = pend.dir == -1 ? pend.bodyHigh : pend.bodyLow
+                cons     = pend.extreme
+                sigDir   := pend.dir
+                sigEntry := close
+                sigSL    := (slMode == "Aggressive" ? aggr : cons) + pend.dir * -tickBuf
+                sigName  := "CRT Model 1"
+                pend     := f_dropPend()
+
+// A new manipulation candle. Evaluated after the state machine so the bulky bar is never
+// counted as its own confirmation bar.
+body    = math.abs(close - open)
+rng     = high - low
+isBulky = body >= bulkyAtrMult * atr and rng > 0 and body / rng >= bulkyBodyPct
+
+if procBar and useM1 and isBulky and not na(c1High) and bar_index > c1Bar and bar_index - c1Bar <= c1Valid
+    exitUp = high > c1High
+    exitDn = low  < c1Low
+    // An armed zone is left alone; anything earlier is superseded by this candle.
+    bool canReplace = true
+    if not na(pend)
+        canReplace := pend.stage < 2
+    if (exitUp or exitDn) and canReplace
+        // Engulfing both sides of the range: the larger excursion is the manipulation.
+        int dir = exitUp and exitDn ? ((high - c1High) > (c1Low - low) ? -1 : 1) : exitUp ? -1 : 1
+        pend := f_dropPend()
+        pend := Setup.new(dir = dir, bulkyBar = bar_index, bulkyHigh = high, bulkyLow = low, bodyHigh = math.max(open, close), bodyLow = math.min(open, close), stage = 0, tapped = false, extreme = dir == -1 ? high : low)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Module 2 — trend continuation
+// ═══════════════════════════════════════════════════════════════════════════════
+var float ph1 = na
+var float ph2 = na
+var float pl1 = na
+var float pl2 = na
+phTc = ta.pivothigh(tcPivotLen, tcPivotLen)
+plTc = ta.pivotlow(tcPivotLen, tcPivotLen)
+if not na(phTc)
+    ph2 := ph1
+    ph1 := phTc
+if not na(plTc)
+    pl2 := pl1
+    pl1 := plTc
+
+trendUp = not na(ph2) and not na(pl2) and ph1 > ph2 and pl1 > pl2
+trendDn = not na(ph2) and not na(pl2) and ph1 < ph2 and pl1 < pl2
+
+// Impulse leg: anchored at the pivot that started it, extended by the running extreme.
+var float legHigh = na
+var float legLow  = na
+if not na(plTc)
+    legLow  := plTc
+    legHigh := high
+if not na(phTc)
+    legHigh := phTc
+    legLow  := low
+legHigh := na(legHigh) ? high : math.max(legHigh, high)
+legLow  := na(legLow)  ? low  : math.min(legLow, low)
+eq = (legHigh + legLow) / 2
+inDiscount = not tcRequireDisc or close < eq
+inPremium  = not tcRequireDisc or close > eq
+
+// The "opposite candle": bearish candles in an uptrend, bullish candles in a downtrend.
+var float oppHigh = na
+var float oppLow  = na
+var int   oppBar  = na
+var int   oppDir  = 0
+
+if procBar and useTC and sigDir == 0
+    if not na(oppHigh) and bar_index > oppBar
+        // Broke and closed completely outside the range → skip it, wait for the next one.
+        brokeOut = oppDir == 1 ? close < oppLow : close > oppHigh
+        swept    = oppDir == 1 ? low < oppLow and close > oppLow and close <= oppHigh : high > oppHigh and close < oppHigh and close >= oppLow
+        if brokeOut
+            oppHigh := na
+            oppLow  := na
+        else if swept and inSession and (oppDir == 1 ? inDiscount : inPremium)
+            aggr     = oppDir == 1 ? oppLow : oppHigh
+            cons     = oppDir == 1 ? low : high
+            sigDir   := oppDir
+            sigEntry := close
+            sigSL    := (slMode == "Aggressive" ? aggr : cons) + oppDir * -tickBuf
+            sigName  := "CRT Continuation"
+            oppHigh  := na
+            oppLow   := na
+
+    if sigDir == 0
+        if trendUp and close < open
+            oppHigh := high
+            oppLow  := low
+            oppBar  := bar_index
+            oppDir  := 1
+        else if trendDn and close > open
+            oppHigh := high
+            oppLow  := low
+            oppBar  := bar_index
+            oppDir  := -1
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Lower-timeframe FVG refinement
+// ═══════════════════════════════════════════════════════════════════════════════
+ltfOK  = useLtf and timeframe.in_seconds(ltfRes) < timeframe.in_seconds(timeframe.period)
+// The fallback must never be *higher* than the chart timeframe — that is a runtime error.
+ltfReq = ltfOK ? ltfRes : timeframe.period
+[ltfH, ltfL] = request.security_lower_tf(syminfo.tickerid, ltfReq, [high, low])
+
+// Newest gap inside the signal bar's intrabar data, in the direction we are trading.
+f_ltfGap(array<float> hs, array<float> ls, int dir) =>
+    float top = na
+    float bot = na
+    n = array.size(hs)
+    if n >= 3
+        for i = n - 1 to 2
+            if dir == 1 and array.get(ls, i) > array.get(hs, i - 2)
+                top := array.get(ls, i)
+                bot := array.get(hs, i - 2)
+                break
+            if dir == -1 and array.get(hs, i) < array.get(ls, i - 2)
+                top := array.get(ls, i - 2)
+                bot := array.get(hs, i)
+                break
+    [top, bot]
+
+float refined = na
+if sigDir != 0 and ltfOK
+    [gTop, gBot] = f_ltfGap(ltfH, ltfL, sigDir)
+    if not na(gTop)
+        refined := switch ltfFill
+            "50%"    => (gTop + gBot) / 2
+            "Distal" => sigDir == 1 ? gBot : gTop
+            => sigDir == 1 ? gTop : gBot
+        box.new(bar_index, gTop, bar_index + drawBars, gBot, border_color = sigDir == 1 ? bullCol : bearCol, bgcolor = color.new(sigDir == 1 ? bullCol : bearCol, 75), text = ltfRes + " FVG", text_size = size.tiny, text_color = color.gray)
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Risk block — levels, drawings, trade tracking, alerts
+// ═══════════════════════════════════════════════════════════════════════════════
+var int    tDir    = 0
+var float  tEntry  = na
+var float  tSL     = na
+var float  tTP1    = na
+var bool   tTP1Hit = false
+var bool   tFilled = true
+var int    tBar    = na
+var string tName   = ""
+
+// A signal whose stop sits on top of the entry is unusable — drop it rather than divide
+// by zero.
+validSig = sigDir != 0 and not na(sigSL) and math.abs(sigEntry - sigSL) > syminfo.mintick
+
+if validSig
+    // With LTF refinement the entry is a resting limit inside the gap, so the trade is
+    // only live once price trades back to it.
+    entry = na(refined) ? sigEntry : refined
+    risk  = math.abs(entry - sigSL)
+    tDir    := sigDir
+    tEntry  := entry
+    tSL     := sigSL
+    tTP1    := entry + sigDir * risk
+    tTP1Hit := false
+    tFilled := na(refined)
+    tBar    := bar_index
+    tName   := sigName
+
+    lc = sigDir == 1 ? bullCol : bearCol
+    line.new(bar_index, entry, bar_index + drawBars, entry, color = color.blue, width = 2)
+    line.new(bar_index, tSL,   bar_index + drawBars, tSL,   color = bearCol, style = line.style_dashed)
+    line.new(bar_index, tTP1,  bar_index + drawBars, tTP1,  color = bullCol, style = line.style_dashed)
+    label.new(bar_index + drawBars, entry, sigName + (na(refined) ? "" : " (LTF limit)"), style = label.style_label_left, color = color.new(lc, 20), textcolor = color.white, size = size.small)
+
+    alert(sigName + (sigDir == 1 ? " BUY " : " SELL ") + syminfo.ticker + " @ " + str.tostring(entry, format.mintick) + " | SL " + str.tostring(tSL, format.mintick) + " | 1R " + str.tostring(tTP1, format.mintick), alert.freq_once_per_bar_close)
+
+bool hit1R = false
+if procBar and not validSig and tDir != 0
+    if not tFilled
+        if (tDir == 1 ? low <= tEntry : high >= tEntry)
+            tFilled := true
+        else if bar_index - tBar > zoneExpiry
+            tDir := 0        // the limit never filled — stand down
+    if tFilled and tDir != 0
+        if not tTP1Hit and (tDir == 1 ? high >= tTP1 : low <= tTP1)
+            tTP1Hit := true
+            hit1R   := true
+            if alertAt1R
+                alert(tName + " 1:1 reached on " + syminfo.ticker + " — close 50% and move the stop to breakeven.", alert.freq_once_per_bar_close)
+        if (tDir == 1 ? low <= tSL : high >= tSL)
+            tDir := 0
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// Plots
+// ═══════════════════════════════════════════════════════════════════════════════
+buySig  = validSig and sigDir == 1
+sellSig = validSig and sigDir == -1
+
+plotshape(buySig,  title = "CRT Buy",  style = shape.triangleup,   location = location.belowbar, color = bullCol, size = size.small)
+plotshape(sellSig, title = "CRT Sell", style = shape.triangledown, location = location.abovebar, color = bearCol, size = size.small)
+plotshape(hit1R ? tTP1 : na, title = "1:1 reached", style = shape.xcross, location = location.absolute, color = color.orange, size = size.tiny)
+
+alertcondition(buySig,  "CRT buy signal",  "CRT buy signal")
+alertcondition(sellSig, "CRT sell signal", "CRT sell signal")
+alertcondition(hit1R,   "CRT 1:1 reached", "CRT 1:1 reached — close 50% and move the stop to breakeven")

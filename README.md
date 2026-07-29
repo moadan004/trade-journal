@@ -24,10 +24,18 @@ performed** — that needs Render/Vercel/Google Cloud account access.
 ```
 /backend    FastAPI app (routers/, models/, schemas/, core/, services/, alembic/)
 /frontend   Next.js app (login/register pages, calendar dashboard, analytics)
+/indicators TradingView Pine Script indicators (CRT reversal + trend continuation)
 docker-compose.yml   Local Postgres for development
 render.yaml          Render Blueprint: backend web service + Postgres
 plan.md              Full product/build plan
 ```
+
+`indicators/` is standalone charting work, independent of the app: `crt_models.pine` is
+a TradingView (Pine v6) indicator implementing the two Candle Range Theory models —
+Model 1 reversals and trend-continuation sweeps — with stop-loss modes, a 1:1 partial
+alert and a New-York-open timing filter. See [`indicators/README.md`](./indicators/README.md)
+for the rule-by-rule mapping and its limitations. It does not read from or write to the
+journal API.
 
 ## Backend setup
 
