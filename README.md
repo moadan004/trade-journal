@@ -25,7 +25,7 @@ performed** — that needs Render/Vercel/Google Cloud account access.
 /backend    FastAPI app (routers/, models/, schemas/, core/, services/, alembic/)
 /frontend   Next.js app (login/register pages, calendar dashboard, analytics)
 docker-compose.yml   Local Postgres for development
-render.yaml          Render Blueprint: backend web service + Postgres
+render.yaml          Render Blueprint: backend web service (external Postgres via DATABASE_URL)
 plan.md              Full product/build plan
 ```
 
@@ -39,7 +39,7 @@ docker compose up -d postgres
 
 This starts Postgres 16 on `localhost:5432` with user/password/db all set to
 `trade_journal` (see `docker-compose.yml`). If you'd rather use an existing local
-Postgres install or a hosted instance (e.g. Render), just point `DATABASE_URL` at it instead.
+Postgres install or a hosted instance (e.g. Supabase), just point `DATABASE_URL` at it instead.
 
 ### 2. Configure environment
 
@@ -471,9 +471,10 @@ Note that requests appear in devtools as `localhost:3000/api/...`, not
 
 ## Deploying
 
-Backend and database on **Render**, frontend on **Vercel**. The backend side is
-declared as code in [`render.yaml`](./render.yaml) so it's reviewable in git rather
-than living only in dashboard clicks.
+Backend web service on **Render**, external Postgres database on **Supabase** (or
+similar), and frontend on **Vercel**. The backend side is declared as code in
+[`render.yaml`](./render.yaml) so it's reviewable in git rather than living only in
+dashboard clicks.
 
 ### Ordering
 
@@ -482,16 +483,20 @@ Render first. (There is no dependency in the other direction — production need
 CORS, because the browser only talks to Vercel and the Vercel→Render hop is
 server-to-server.)
 
-### 1. Render — backend + Postgres
+### 1. Render — backend web service
 
 Render → **Blueprints** → **New Blueprint Instance** → point at this repo. `render.yaml`
-creates the Postgres instance and the `trade-journal-api` web service, wires
-`DATABASE_URL` from the database, generates a `JWT_SECRET`, and sets `COOKIE_SECURE=true`.
+creates only the `trade-journal-api` web service; it does **not** create a
+Render-managed Postgres database. Use an external Postgres provider instead
+(Supabase or similar). The blueprint generates a `JWT_SECRET` and sets
+`COOKIE_SECURE=true`.
 
-Two variables are marked `sync: false` and must be set by hand in the dashboard:
+Three variables are marked `sync: false` and must be set by hand in the dashboard
+during blueprint deploy:
 
 | Variable | Value |
 |---|---|
+| `DATABASE_URL` | external Postgres connection string (for example, Supabase) |
 | `GOOGLE_CLIENT_ID` | your OAuth Client ID (same value the frontend uses) |
 | `CORS_ORIGINS` | optional — see note below |
 
@@ -510,10 +515,10 @@ Things `render.yaml` already handles that are easy to get wrong by hand:
   never goes healthy means checking the logs for an Alembic error. The `&&` is
   deliberate: if the migration fails, uvicorn never starts, which beats serving against
   a schema the code doesn't expect.
-- **Render exposes Postgres as `postgres://...`**, which SQLAlchemy doesn't accept —
-  and even `postgresql://` would resolve to psycopg2, which isn't installed. The app
-  normalizes either form to `postgresql+psycopg://` at load time
-  (`backend/app/core/config.py`), so no manual URL editing is needed.
+- **Postgres URL schemes are normalized by the app.** If your external provider gives
+  you `postgres://...` or `postgresql://...`, the app normalizes either form to
+  `postgresql+psycopg://` at load time (`backend/app/core/config.py`), so no manual
+  URL editing is needed.
 - **`backend/runtime.txt` pins Python 3.12**, so Render doesn't pick a different default.
 
 ### 2. Vercel — frontend
@@ -555,6 +560,6 @@ Deploying isn't done until this passes end-to-end in production:
 5. In devtools → Network, confirm requests go to your Vercel origin under `/api/*` and
    not to the Render domain.
 
-Two things to expect on Render's free tier: the service **spins down when idle**, so the
-first request after a quiet period is slow, and free Postgres has retention/lifetime
-limits — check Render's current terms before trusting it with trade data you care about.
+Expect Render's free web service to **spin down when idle**, so the first request after
+a quiet period is slow. Database retention, lifetime, and connection limits depend on
+your external Postgres provider (Supabase or similar), not Render-managed Postgres.
