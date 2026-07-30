@@ -38,6 +38,10 @@ services:
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
+      # Pin Python below 3.14 until binary wheels (notably psycopg-binary) support cp314.
+      # Render supports PYTHON_VERSION as a fully qualified version.
+      - key: PYTHON_VERSION
+        value: "3.12.13"
       # Supply an external Postgres connection string (for example, Supabase)
       # manually in Render during blueprint deploy. app.core.config normalizes
       # postgres:// and postgresql:// schemes to postgresql+psycopg://.
