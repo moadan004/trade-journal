@@ -95,6 +95,7 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | POST   | `/reviews`                    | Create a weekly review (409 if one already exists for that week) |
 | PUT    | `/reviews/{date}`             | Upsert the weekly review covering `date` |
 | GET    | `/trades/export`              | Download filtered trades as `format=csv` or `format=pdf` (optional `start`/`end`/`account_id`) |
+| GET    | `/trades/{id}/screenshot`     | Serve the trade's chart image — ownership-checked, 404 if none or not yours |
 | POST   | `/trades/{id}/screenshot`     | Attach a chart image (multipart `file`), replacing any existing one |
 | DELETE | `/trades/{id}/screenshot`     | Remove a trade's screenshot |
 
@@ -168,14 +169,26 @@ off-hours `21–00`.
 ### Screenshots
 
 Images are written to `backend/uploads/screenshots/` (gitignored, configurable via
-`UPLOAD_DIR`) and served from a `/uploads` static mount. Both the Next dev server and
-Vercel proxy `/uploads/*` to the backend alongside `/api/*`, so the stored URL stays a
-plain backend-relative path with no frontend routing baked into it.
+`UPLOAD_DIR`) and served **only** through `GET /trades/{id}/screenshot`, which resolves
+the trade through the same ownership check as every other trade route.
+
+There is deliberately **no `StaticFiles` mount.** An earlier revision mounted the upload
+directory directly, which bypassed authentication entirely: a request with no cookie at
+all, or from a different account, got HTTP 200 and the image. The uuid filename made
+those URLs unguessable, not private — and URLs leak into logs, browser history and
+shared links.
+
+The column still stores the internal path (`/uploads/screenshots/<uuid>.ext`); `TradeRead`
+rewrites it to the route on the way out, so no migration was needed and one place knows
+the mapping. Denials are `404`, not `403`, so a stranger can't use the response to confirm
+that a trade id exists. A plain `<img src>` works because the auth cookie is same-origin
+and the browser attaches it automatically.
 
 > ⚠️ **Uploads do not survive a deploy on Render.** The free tier's filesystem is
-> ephemeral — every deploy and every restart wipes it, and `screenshot_url` will then
-> point at a file that no longer exists. This is fine for local use; before relying on
-> it in production, move to a Render persistent disk or S3-compatible storage.
+> ephemeral — every deploy and every restart wipes it, and the stored pointer will then
+> reference a file that no longer exists (the route returns 404 for that, which is the
+> expected state rather than a bug). This is fine for local use; before relying on it in
+> production, move to a Render persistent disk or S3-compatible storage.
 
 Three things the upload path deliberately doesn't trust:
 
