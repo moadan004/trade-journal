@@ -18,16 +18,6 @@ const nextConfig: NextConfig = {
         source: "/api/:path*",
         destination: `${BACKEND_ORIGIN}/:path*`,
       },
-      // Trade screenshots. The backend stores and returns these as
-      // /uploads/screenshots/<name>, which is not under /api, so without this
-      // rule the browser asks Next for the path and gets a 404 page - the
-      // <img> silently shows nothing. Proxied rather than rewriting the stored
-      // URL to /api/uploads/... so the database keeps a plain backend-relative
-      // path with no frontend routing baked into it.
-      {
-        source: "/uploads/:path*",
-        destination: `${BACKEND_ORIGIN}/uploads/:path*`,
-      },
     ];
   },
 };

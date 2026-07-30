@@ -2,7 +2,14 @@
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 
-import { ApiError, createTrade, deleteScreenshot, updateTrade, uploadScreenshot } from "@/lib/api";
+import {
+  ApiError,
+  createTrade,
+  deleteScreenshot,
+  screenshotSrc,
+  updateTrade,
+  uploadScreenshot,
+} from "@/lib/api";
 import { datetimeLocalToIso, toDatetimeLocalValue } from "@/lib/calendar";
 import { CHECKLIST_ITEMS, emptyChecklist, type ChecklistAnswers } from "@/lib/checklist";
 import { computePnl, computeStatus } from "@/lib/pnl";
@@ -64,9 +71,15 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
   // Screenshot state. A new trade has no id yet, so the file is staged here and
   // uploaded after the trade is saved; editing an existing trade can also just
   // drop the current image.
+  // Id of a trade this modal already created. In add mode a screenshot upload
+  // happens *after* createTrade has committed, so if the upload fails the trade
+  // exists but onSaved() never ran and the modal is still in add mode. Without
+  // remembering the id, pressing Save again created a second trade. With it, the
+  // retry updates the one that already exists.
+  const [createdTradeId, setCreatedTradeId] = useState<number | null>(null);
   const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
-  const [existingScreenshot, setExistingScreenshot] = useState(trade?.screenshot_url ?? null);
+  const [existingScreenshot, setExistingScreenshot] = useState(trade ? screenshotSrc(trade) : null);
   const [removeExisting, setRemoveExisting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -203,20 +216,44 @@ export function TradeFormModal({ accounts, trade, defaultDate, onClose, onSaved 
     };
 
     setSaving(true);
-    const request = isEdit
-      ? updateTrade(trade.id, basePayload)
-      : createTrade({ ...basePayload, account_id: accountId, fees: 0 });
+    // A retry after a failed screenshot upload must not create a second trade,
+    // so once this modal has created one it updates that id from then on.
+    const existingId = isEdit ? trade.id : createdTradeId;
+    const request =
+      existingId !== null
+        ? updateTrade(existingId, basePayload)
+        : createTrade({ ...basePayload, account_id: accountId, fees: 0 });
+
+    // Local, not the state value: setCreatedTradeId won't be visible to the
+    // catch below, which closes over this render's `createdTradeId`.
+    let justCreated = false;
 
     request
       .then((saved) => {
+        if (existingId === null) {
+          justCreated = true;
+          setCreatedTradeId(saved.id);
+        }
         // The screenshot is a separate call, and for a new trade it can only
         // happen once the trade exists and has an id.
-        if (screenshotFile) return uploadScreenshot(saved.id, screenshotFile);
+        if (screenshotFile) {
+          return uploadScreenshot(saved.id, screenshotFile).then((withShot) => {
+            // Don't re-upload on a later retry; the file is attached now.
+            setScreenshotFile(null);
+            setScreenshotPreview(null);
+            return withShot;
+          });
+        }
         if (removeExisting) return deleteScreenshot(saved.id);
         return saved;
       })
       .then(() => onSaved())
-      .catch((err) => setError(err instanceof ApiError ? err.message : "Failed to save trade."))
+      .catch((err) => {
+        const message = err instanceof ApiError ? err.message : "Failed to save trade.";
+        // Say so when the trade landed and only the screenshot didn't, otherwise
+        // the error reads as "nothing saved" and invites a resubmit.
+        setError(justCreated ? `Trade saved — but the screenshot failed: ${message}` : message);
+      })
       .finally(() => setSaving(false));
   }
 

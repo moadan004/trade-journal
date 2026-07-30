@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 
-import { deleteTrade, listTradesByDate } from "@/lib/api";
+import { deleteTrade, listTradesByDate, screenshotSrc } from "@/lib/api";
 import { checklistScore } from "@/lib/checklist";
 import { formatR, tradeR } from "@/lib/risk";
 import { Modal } from "@/components/Modal";
@@ -148,17 +148,18 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                   </p>
                 </div>
 
-                {trade.screenshot_url && (
+                {screenshotSrc(trade) && (
                   <button
                     type="button"
-                    onClick={() => setLightboxSrc(trade.screenshot_url)}
+                    onClick={() => setLightboxSrc(screenshotSrc(trade))}
                     aria-label="Enlarge trade screenshot"
                     className="mt-2 block overflow-hidden rounded-lg border border-zinc-200 transition-opacity hover:opacity-80 dark:border-zinc-700"
                   >
-                    {/* Runtime upload path; next/image can't optimize it. */}
+                    {/* Authenticated backend route, not a static asset; next/image
+                        can't optimize it and would strip the cookie. */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img
-                      src={trade.screenshot_url}
+                      src={screenshotSrc(trade)!}
                       alt={`${trade.symbol} chart`}
                       className="h-20 w-32 object-cover"
                     />

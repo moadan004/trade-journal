@@ -272,3 +272,15 @@ export async function exportTrades(format: "csv" | "pdf", filters: ExportFilters
   // enough for the click to have been dispatched.
   setTimeout(() => URL.revokeObjectURL(url), 0);
 }
+
+/**
+ * Browser-usable src for a trade's screenshot, or null if it has none.
+ *
+ * `screenshot_url` from the API is backend-relative (`/trades/{id}/screenshot`)
+ * and needs the `/api` prefix to reach the proxy. It's an authenticated route
+ * now, not a static file, which works from an <img> because the auth cookie is
+ * same-origin and the browser attaches it to image requests automatically.
+ */
+export function screenshotSrc(trade: Pick<TradeRead, "screenshot_url">): string | null {
+  return trade.screenshot_url ? `${API_BASE}${trade.screenshot_url}` : null;
+}
