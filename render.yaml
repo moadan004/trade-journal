@@ -1,19 +1,13 @@
 # Render Blueprint - https://render.com/docs/blueprint-spec
 #
-# Declares the backend web service and its Postgres database so the setup is
-# reviewable in git rather than living only in dashboard clicks. Apply it via
+# Declares the backend web service so the setup is reviewable in git rather
+# than living only in dashboard clicks. Apply it via
 # Render -> Blueprints -> New Blueprint Instance, pointed at this repo.
 #
 # NOTE: this covers the backend only. The frontend deploys to Vercel, which is
-# configured separately (see the deploy runbook in README.md). Two values must be
-# set by hand after the first Vercel deploy, because the Vercel URL isn't known
-# until then - both are marked `sync: false` below.
-
-databases:
-  - name: trade-journal-db
-    databaseName: trade_journal
-    user: trade_journal
-    plan: free
+# configured separately (see the deploy runbook in README.md). DATABASE_URL must
+# be set by hand during blueprint deploy for an external Postgres provider. The
+# other sync: false values are filled in once the Vercel/Google OAuth details exist.
 
 services:
   - type: web
@@ -44,12 +38,11 @@ services:
     startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      # Render exposes this as postgres://... - app.core.config normalizes the
-      # scheme to postgresql+psycopg:// at load time.
+      # Supply an external Postgres connection string (for example, Supabase)
+      # manually in Render during blueprint deploy. app.core.config normalizes
+      # postgres:// and postgresql:// schemes to postgresql+psycopg://.
       - key: DATABASE_URL
-        fromDatabase:
-          name: trade-journal-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Required: the auth cookie must be HTTPS-only in production.
