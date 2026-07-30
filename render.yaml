@@ -41,6 +41,21 @@ services:
       # Supply an external Postgres connection string (for example, Supabase)
       # manually in Render during blueprint deploy. app.core.config normalizes
       # postgres:// and postgresql:// schemes to postgresql+psycopg://.
+      #
+      # If the provider offers several connection strings, they are not
+      # interchangeable here. On Supabase, prefer the *session* pooler (port 5432,
+      # host aws-*.pooler.supabase.com):
+      #  - Session pooler: IPv4, one server connection per client session.
+      #  - Transaction pooler (port 6543): transaction-mode pooling historically
+      #    does not support prepared statements, and psycopg 3 issues them
+      #    automatically once a query repeats (prepare_threshold defaults to 5).
+      #    The symptom is intermittent "prepared statement ... already exists"
+      #    under repeat traffic, not a clean failure at boot. If you must use it,
+      #    disable them via connect_args={"prepare_threshold": None} in
+      #    app.core.database rather than fighting the pooler.
+      #  - Direct connection (db.*.supabase.co:5432): fine if it resolves, but
+      #    newer projects expose it over IPv6 only, which Render may not route
+      #    outbound.
       - key: DATABASE_URL
         sync: false
       - key: JWT_SECRET

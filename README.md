@@ -500,6 +500,29 @@ during blueprint deploy:
 | `GOOGLE_CLIENT_ID` | your OAuth Client ID (same value the frontend uses) |
 | `CORS_ORIGINS` | optional — see note below |
 
+The service **crash-loops if `DATABASE_URL` is missing or wrong**, because migrations run
+in `startCommand` — a deploy that never turns healthy usually means checking that value
+first.
+
+#### Which Supabase connection string to copy
+
+Supabase's dashboard offers three, and they are **not** interchangeable here:
+
+| Option | Use it? | Why |
+|---|---|---|
+| **Session pooler** — port `5432`, host `aws-*.pooler.supabase.com` | ✅ **this one** | IPv4, one server connection per client session |
+| Transaction pooler — port `6543` | ⚠️ see below | transaction-mode pooling has historically not supported prepared statements |
+| Direct — `db.*.supabase.co:5432` | ⚠️ | fine if it resolves, but newer projects expose it over IPv6 only, which Render may not route outbound |
+
+The transaction pooler is the one worth understanding, because it *appears* to work.
+psycopg 3 prepares a statement automatically once the same query repeats
+(`prepare_threshold` defaults to 5), so failures show up as intermittent
+`prepared statement "..." already exists` errors under traffic rather than a clean error
+at startup. Pooler capabilities do change between versions — if you have a reason to use
+the transaction pooler, disable prepared statements on our side instead of fighting it:
+pass `connect_args={"prepare_threshold": None}` to `create_engine` in
+`backend/app/core/database.py`.
+
 Note the URL Render assigns the service, e.g. `https://trade-journal-api.onrender.com`.
 
 Things `render.yaml` already handles that are easy to get wrong by hand:
