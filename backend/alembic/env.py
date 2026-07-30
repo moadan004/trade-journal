@@ -2,7 +2,7 @@ import sys
 from logging.config import fileConfig
 from pathlib import Path
 
-from sqlalchemy import engine_from_config
+from sqlalchemy import create_engine
 from sqlalchemy import pool
 
 from alembic import context
@@ -22,7 +22,16 @@ config = context.config
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-config.set_main_option("sqlalchemy.url", get_settings().database_url)
+# Deliberately NOT config.set_main_option("sqlalchemy.url", ...): that hands the
+# value to ConfigParser.set(), which runs pyformat interpolation over it. A
+# percent-encoded password - `p%40ssword` for a literal `@`, which is exactly what
+# a correctly-escaped connection string looks like - then raises
+# "ValueError: invalid interpolation syntax" before a single packet is sent.
+# Escaping to `%%` would work, but keeping the URL out of the .ini entirely also
+# sidesteps ConfigParser's `;` inline-comment handling, and means the credentials
+# never land in an object whose repr gets logged. So the URL is read once here and
+# passed straight to SQLAlchemy.
+DATABASE_URL = get_settings().database_url
 
 target_metadata = Base.metadata
 
@@ -44,9 +53,8 @@ def run_migrations_offline() -> None:
     script output.
 
     """
-    url = config.get_main_option("sqlalchemy.url")
     context.configure(
-        url=url,
+        url=DATABASE_URL,
         target_metadata=target_metadata,
         literal_binds=True,
         dialect_opts={"paramstyle": "named"},
@@ -63,11 +71,9 @@ def run_migrations_online() -> None:
     and associate a connection with the context.
 
     """
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    # NullPool: a migration run is one short-lived connection, and pooling it
+    # would hold the connection open against the pooler after we're done.
+    connectable = create_engine(DATABASE_URL, poolclass=pool.NullPool)
 
     with connectable.connect() as connection:
         context.configure(
