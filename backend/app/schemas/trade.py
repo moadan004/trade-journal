@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, model_validator
 
 from app.models.trade import TradeSide, TradeStatus
 
@@ -70,6 +70,20 @@ class TradeRead(BaseModel):
     status: TradeStatus
     created_at: datetime
     updated_at: datetime
+
+    @model_validator(mode="after")
+    def _expose_screenshot_route(self):
+        """Replace the stored storage pointer with the authenticated route.
+
+        The column holds an internal path (`/uploads/screenshots/<uuid>.ext`)
+        that is no longer browser-reachable - screenshots are served by
+        GET /trades/{id}/screenshot after an ownership check. Rewriting here
+        means every endpoint returning a TradeRead hands the client a URL that
+        actually works, without a migration to change what's stored.
+        """
+        if self.screenshot_url:
+            self.screenshot_url = f"/trades/{self.id}/screenshot"
+        return self
 
 
 class ImportSkippedRow(BaseModel):

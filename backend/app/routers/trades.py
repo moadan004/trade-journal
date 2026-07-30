@@ -1,6 +1,7 @@
 from datetime import date
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Response, UploadFile, status
+from fastapi.responses import FileResponse
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
@@ -13,10 +14,15 @@ from app.core.config import get_settings
 from app.schemas.trade import ImportResult, TradeCreate, TradeRead, TradeUpdate
 from app.services.csv_import import CsvImportError, parse_trade_history_csv
 from app.services.export import trades_to_csv, trades_to_pdf
-from app.services.uploads import delete_screenshot, save_screenshot
+from app.services.uploads import delete_screenshot, resolve_screenshot, save_screenshot
 
 router = APIRouter(prefix="/trades", tags=["trades"])
 settings = get_settings()
+
+# Content types for the formats save_screenshot accepts. Set explicitly rather
+# than sniffed from the extension at serve time, so the response can never
+# advertise something the upload validator wouldn't have allowed in.
+MEDIA_TYPES = {".png": "image/png", ".jpg": "image/jpeg", ".gif": "image/gif", ".webp": "image/webp"}
 
 
 def _get_owned_account(db: Session, account_id: int, user: User) -> Account:
@@ -175,6 +181,39 @@ def delete_trade(
     delete_screenshot(trade.screenshot_url, settings.upload_dir)
     db.delete(trade)
     db.commit()
+
+
+@router.get("/{trade_id}/screenshot")
+def get_screenshot(
+    trade_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Serve a trade's screenshot, but only to the user who owns the trade.
+
+    This exists instead of a StaticFiles mount. A bare static mount doesn't go
+    through get_current_user or any ownership check, so every screenshot was
+    readable by anyone holding the URL - including a logged-out visitor, another
+    account, or anything the URL leaked into (logs, history, a shared link). The
+    uuid filename made it unguessable, not private.
+
+    Works with a plain <img src> because the auth cookie is same-origin and sent
+    automatically; no header plumbing needed on the frontend.
+    """
+    trade = _get_owned_trade(db, trade_id, current_user)
+    path = resolve_screenshot(trade.screenshot_url, settings.upload_dir)
+    if path is None:
+        # Covers "no screenshot", "row points at a file that's gone" (which is the
+        # normal state after a Render deploy wipes the ephemeral disk), and
+        # "pointer doesn't resolve inside the upload root".
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No screenshot for this trade")
+
+    return FileResponse(
+        path,
+        media_type=MEDIA_TYPES.get(path.suffix, "application/octet-stream"),
+        # Screenshots are private; keep them out of shared caches.
+        headers={"Cache-Control": "private, max-age=300"},
+    )
 
 
 @router.post("/{trade_id}/screenshot", response_model=TradeRead)

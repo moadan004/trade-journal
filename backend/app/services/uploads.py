@@ -1,10 +1,15 @@
 """Screenshot storage.
 
 Files land on local disk under the configured upload directory and are served
-back as static files. See the deployment caveat in README: on Render's free
-tier the filesystem is **ephemeral**, so uploads do not survive a deploy or a
-restart. This is fine for local use and for trying the feature out; it is not
-storage you should trust with anything you want to keep.
+back only through the ownership-checked route in app/routers/trades.py - there
+is deliberately no static mount, because a bare StaticFiles app bypasses
+authentication entirely and would make every screenshot readable by anyone
+holding the URL.
+
+See the deployment caveat in README: on Render's free tier the filesystem is
+**ephemeral**, so uploads do not survive a deploy or a restart. This is fine for
+local use and for trying the feature out; it is not storage you should trust
+with anything you want to keep.
 """
 
 import uuid
@@ -26,6 +31,13 @@ ALLOWED_IMAGE_TYPES: dict[str, tuple[bytes, ...]] = {
 }
 
 SUBDIR = "screenshots"
+
+# Prefix on the value stored in Trade.screenshot_url. It is an internal storage
+# pointer, NOT a browser-reachable URL - screenshots are served only through the
+# ownership-checked route in app/routers/trades.py. The prefix is kept (rather
+# than storing a bare filename) so existing rows keep working without a
+# migration, and so a stray value can be recognised and refused.
+STORAGE_PREFIX = "uploads"
 
 
 def _sniff_extension(head: bytes) -> str | None:
@@ -60,7 +72,7 @@ def storage_root(upload_dir: str) -> Path:
 
 
 def save_screenshot(file: UploadFile, upload_dir: str, max_bytes: int) -> str:
-    """Persist an uploaded image and return the URL path to serve it from.
+    """Persist an uploaded image and return the internal storage pointer.
 
     Raises HTTPException(400) for anything that isn't a supported image, and
     HTTPException(413) for anything over the size cap.
@@ -89,7 +101,25 @@ def save_screenshot(file: UploadFile, upload_dir: str, max_bytes: int) -> str:
     name = f"{uuid.uuid4().hex}{extension}"
     (target_dir / name).write_bytes(contents)
 
-    return f"/uploads/{SUBDIR}/{name}"
+    return f"/{STORAGE_PREFIX}/{SUBDIR}/{name}"
+
+
+def resolve_screenshot(url: str | None, upload_dir: str) -> Path | None:
+    """The on-disk file for a stored screenshot pointer, or None if unusable.
+
+    Shares the containment check with delete_screenshot: the stored value is
+    treated as untrusted, so only paths that resolve inside the upload root are
+    returned. A doctored `screenshot_url` therefore can't turn the serving route
+    into an arbitrary-file read.
+    """
+    if not url or not url.startswith(f"/{STORAGE_PREFIX}/{SUBDIR}/"):
+        return None
+
+    root = storage_root(upload_dir).resolve()
+    candidate = (root / SUBDIR / Path(url).name).resolve()
+    if not candidate.is_relative_to(root) or not candidate.is_file():
+        return None
+    return candidate
 
 
 def delete_screenshot(url: str | None, upload_dir: str) -> None:
@@ -99,7 +129,7 @@ def delete_screenshot(url: str | None, upload_dir: str) -> None:
     Only touches paths under the upload directory, so a doctored screenshot_url
     can't be used to delete something else.
     """
-    if not url or not url.startswith(f"/uploads/{SUBDIR}/"):
+    if not url or not url.startswith(f"/{STORAGE_PREFIX}/{SUBDIR}/"):
         return
 
     root = storage_root(upload_dir).resolve()
