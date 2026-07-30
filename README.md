@@ -515,7 +515,14 @@ during blueprint deploy:
 
 The service **crash-loops if `DATABASE_URL` is missing or wrong**, because migrations run
 in `startCommand` — a deploy that never turns healthy usually means checking that value
-first.
+first. If it's missing entirely the log shows a pydantic `ValidationError` naming
+`database_url`; there is deliberately no default, so the app never quietly falls back to
+`localhost` and reports a confusing "connection refused" to an address you never set.
+
+If your password contains characters that have to be percent-encoded in a URL (`@` → `%40`,
+`/` → `%2F`), that is safe to paste as-is. Migrations read `DATABASE_URL` straight from the
+environment rather than through Alembic's `.ini`, which would otherwise treat `%` as config
+interpolation and fail before connecting.
 
 #### Which Supabase connection string to copy
 

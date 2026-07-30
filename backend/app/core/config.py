@@ -7,7 +7,14 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql+psycopg://trade_journal:trade_journal@localhost:5432/trade_journal"
+    # Required, deliberately with no default. A default here is worse than a
+    # missing one: an unset DATABASE_URL on a deployed host would silently
+    # resolve to 127.0.0.1:5432 and fail with "connection refused" - or, worse,
+    # succeed against some unrelated local Postgres. Neither says "you forgot to
+    # configure the database". Missing now raises a pydantic ValidationError
+    # naming the field, before anything opens a socket. Local dev supplies it via
+    # backend/.env (see .env.example).
+    database_url: str
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
