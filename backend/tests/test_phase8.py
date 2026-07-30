@@ -20,7 +20,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.core.config import get_settings
+from app.core.database import SessionLocal
 from app.main import app
+from app.models.trade import Trade
 from app.services.uploads import SUBDIR, storage_root
 
 settings = get_settings()
@@ -53,6 +55,23 @@ def _account(client: TestClient, name: str = "Main") -> int:
     resp = client.post("/accounts", json={"name": name, "broker": "Exness", "currency": "USD"})
     assert resp.status_code == 201, resp.text
     return resp.json()["id"]
+
+
+def _stored_pointer(trade_id: int) -> str | None:
+    """The raw storage pointer in the column, not the URL the API exposes.
+
+    Since screenshots are served through an ownership-checked route, the
+    exposed `screenshot_url` is `/trades/{id}/screenshot` and no longer reveals
+    the filename - so tests that need the file on disk read the column.
+    """
+    with SessionLocal() as db:
+        return db.get(Trade, trade_id).screenshot_url
+
+
+def _disk_path(trade_id: int):
+    pointer = _stored_pointer(trade_id)
+    assert pointer, f"trade {trade_id} has no stored screenshot pointer"
+    return storage_root(settings.upload_dir) / SUBDIR / pointer.rsplit("/", 1)[-1]
 
 
 def _trade(client: TestClient, account_id: int, **overrides) -> dict:
@@ -89,14 +108,20 @@ def test_upload_png_persists_url_and_file(client):
     )
     assert resp.status_code == 200, resp.text
     url = resp.json()["screenshot_url"]
-    assert url.startswith(f"/uploads/{SUBDIR}/")
-    assert url.endswith(".png")
+    # The exposed URL is the ownership-checked route, not a static file path.
+    assert url == f"/trades/{trade['id']}/screenshot"
 
-    # The file is really on disk, and really servable.
-    assert (storage_root(settings.upload_dir) / SUBDIR / url.rsplit("/", 1)[-1]).exists()
+    # The stored pointer is still the internal storage path (no migration).
+    assert _stored_pointer(trade["id"]).startswith(f"/{SUBDIR}/") is False
+    assert _stored_pointer(trade["id"]).startswith(f"/uploads/{SUBDIR}/")
+    assert _disk_path(trade["id"]).exists()
+
     served = client.get(url)
     assert served.status_code == 200
     assert served.content == PNG_1PX
+    assert served.headers["content-type"] == "image/png"
+    # Private data must not land in a shared cache.
+    assert "private" in served.headers.get("cache-control", "")
 
     # And it survives a fresh read of the trade, not just the upload response.
     assert client.get(f"/trades/{trade['id']}").json()["screenshot_url"] == url
@@ -159,11 +184,11 @@ def test_client_filename_cannot_steer_where_the_file_lands(client, hostile_name)
         files={"file": (hostile_name, PNG_1PX, "image/png")},
     )
     assert resp.status_code == 200, resp.text
-    url = resp.json()["screenshot_url"]
 
-    stored = url.rsplit("/", 1)[-1]
-    assert ".." not in url and ".." not in stored
-    assert url.startswith(f"/uploads/{SUBDIR}/")
+    pointer = _stored_pointer(trade["id"])
+    stored = pointer.rsplit("/", 1)[-1]
+    assert ".." not in pointer and ".." not in stored
+    assert pointer.startswith(f"/uploads/{SUBDIR}/")
     # uuid4().hex + a whitelisted extension, nothing carried over from the input.
     assert re.fullmatch(r"[0-9a-f]{32}\.png", stored), stored
 
@@ -192,25 +217,24 @@ def test_replacing_a_screenshot_removes_the_old_file(client):
     _register(client)
     trade = _trade(client, _account(client))
 
-    first = client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
-    first_url = first.json()["screenshot_url"]
-    first_path = storage_root(settings.upload_dir) / SUBDIR / first_url.rsplit("/", 1)[-1]
+    client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
+    first_pointer = _stored_pointer(trade["id"])
+    first_path = _disk_path(trade["id"])
     assert first_path.exists()
 
-    second = client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("b.gif", GIF_1PX, "image/gif")})
-    second_url = second.json()["screenshot_url"]
-    assert second_url != first_url
+    client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("b.gif", GIF_1PX, "image/gif")})
+    assert _stored_pointer(trade["id"]) != first_pointer
     assert not first_path.exists(), "old screenshot left orphaned on disk"
-    assert (storage_root(settings.upload_dir) / SUBDIR / second_url.rsplit("/", 1)[-1]).exists()
+    assert _disk_path(trade["id"]).exists()
+    # The exposed URL is stable across replacement - it addresses the trade.
+    assert client.get(f"/trades/{trade['id']}").json()["screenshot_url"] == f"/trades/{trade['id']}/screenshot"
 
 
 def test_deleting_screenshot_clears_url_and_file(client):
     _register(client)
     trade = _trade(client, _account(client))
-    url = client.post(
-        f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")}
-    ).json()["screenshot_url"]
-    path = storage_root(settings.upload_dir) / SUBDIR / url.rsplit("/", 1)[-1]
+    client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
+    path = _disk_path(trade["id"])
 
     resp = client.delete(f"/trades/{trade['id']}/screenshot")
     assert resp.status_code == 200, resp.text
@@ -221,10 +245,8 @@ def test_deleting_screenshot_clears_url_and_file(client):
 def test_deleting_a_trade_removes_its_screenshot_file(client):
     _register(client)
     trade = _trade(client, _account(client))
-    url = client.post(
-        f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")}
-    ).json()["screenshot_url"]
-    path = storage_root(settings.upload_dir) / SUBDIR / url.rsplit("/", 1)[-1]
+    client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
+    path = _disk_path(trade["id"])
 
     assert client.delete(f"/trades/{trade['id']}").status_code == 204
     assert not path.exists()
@@ -238,6 +260,65 @@ def test_cannot_upload_to_someone_elses_trade(client):
     _register(other)
     resp = other.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
     assert resp.status_code == 404, resp.text
+
+
+def test_screenshot_is_not_served_without_authentication(client):
+    """Regression: a StaticFiles mount served these to anyone with the URL."""
+    _register(client)
+    trade = _trade(client, _account(client))
+    url = client.post(
+        f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")}
+    ).json()["screenshot_url"]
+
+    anon = TestClient(app)  # no cookie jar entries at all
+    resp = anon.get(url)
+    assert resp.status_code == 401, resp.text
+    assert PNG_1PX not in resp.content
+
+
+def test_screenshot_is_not_served_to_another_user(client):
+    _register(client)
+    trade = _trade(client, _account(client))
+    url = client.post(
+        f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")}
+    ).json()["screenshot_url"]
+
+    other = TestClient(app)
+    _register(other)
+    resp = other.get(url)
+    # 404 rather than 403: the same answer a nonexistent trade gives, so this
+    # doesn't confirm to a stranger that the trade id exists.
+    assert resp.status_code == 404, resp.text
+    assert PNG_1PX not in resp.content
+
+
+def test_old_static_upload_path_is_no_longer_routed(client):
+    """The mount is gone, so the previously-public path must not resolve."""
+    _register(client)
+    trade = _trade(client, _account(client))
+    client.post(f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")})
+
+    pointer = _stored_pointer(trade["id"])  # e.g. /uploads/screenshots/<uuid>.png
+    resp = client.get(pointer)
+    assert resp.status_code == 404, f"{pointer} still served: {resp.status_code}"
+
+
+def test_screenshot_route_404s_when_the_file_is_gone(client):
+    """The normal state after a Render deploy wipes the ephemeral disk."""
+    _register(client)
+    trade = _trade(client, _account(client))
+    url = client.post(
+        f"/trades/{trade['id']}/screenshot", files={"file": ("a.png", PNG_1PX, "image/png")}
+    ).json()["screenshot_url"]
+
+    _disk_path(trade["id"]).unlink()  # row still points at it
+    assert client.get(url).status_code == 404
+
+
+def test_screenshot_route_404s_when_trade_has_none(client):
+    _register(client)
+    trade = _trade(client, _account(client))
+    assert client.get(f"/trades/{trade['id']}/screenshot").status_code == 404
 
 
 def test_upload_requires_authentication(client):
@@ -348,9 +429,12 @@ def _pdf_text(pdf: bytes) -> str:
             except Exception:
                 continue
     text = "\n".join(out)
-    # Content streams write glyphs as (…) Tj / TJ literals; pulling those out
-    # avoids matching operator names by accident.
-    return "\n".join(re.findall(r"\((.*?)\)\s*Tj", text, re.S)) + "\n" + text
+    # Content streams write glyphs as (…) Tj literals, and reportlab splits a
+    # single visual string across several of them (so "P&L" arrives as "P", "&",
+    # "L"). Return the literals both newline-joined and concatenated, so a
+    # search for a value that got split still finds it.
+    shown = re.findall(r"\((.*?)\)\s*Tj", text, re.S)
+    return "\n".join(shown) + "\n" + "".join(shown) + "\n" + text
 
 
 def test_pdf_export_returns_a_real_pdf(client):
@@ -386,6 +470,31 @@ def test_pdf_export_contains_the_trade_data(client):
     assert "2 trades" in text
     assert "60.00" in text
     assert "50%" in text
+
+
+def test_pdf_export_keeps_tags_containing_markup_characters(client):
+    """Regression: Paragraph parses reportlab markup, so `&` and `<` vanished.
+
+    The export still returned HTTP 200 with a valid PDF - the tag text was just
+    silently missing, which is worse than a crash because nothing signals it.
+    """
+    _register(client)
+    account_id = _account(client)
+    _trade(client, account_id, symbol="XAUUSD", tags=["A&B", "<swing>", "R:R 1<2"])
+
+    resp = client.get("/trades/export", params={"format": "pdf"})
+    assert resp.status_code == 200, resp.text
+    text = _pdf_text(resp.content)
+    for tag in ("A&B", "<swing>", "R:R 1<2"):
+        assert tag in text, f"tag {tag!r} missing from the PDF text layer"
+
+
+def test_csv_export_keeps_tags_containing_markup_characters(client):
+    """The CSV path never had the markup problem; pin it so it stays that way."""
+    _register(client)
+    _trade(client, _account(client), tags=["A&B", "<swing>"])
+    body = client.get("/trades/export", params={"format": "csv"}).content.decode("utf-8-sig")
+    assert "A&B" in body and "<swing>" in body
 
 
 def test_pdf_export_handles_an_empty_range(client):

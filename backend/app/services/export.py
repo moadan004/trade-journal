@@ -6,6 +6,7 @@ build needs no cairo/pango system packages.
 
 import csv
 import io
+from xml.sax.saxutils import escape
 from datetime import datetime
 
 from reportlab.lib import colors
@@ -124,7 +125,14 @@ def trades_to_pdf(trades: list[Trade], title: str) -> bytes:
                     f"{float(trade.pnl):+,.2f}",
                     # Paragraph rather than a bare string so a long tag list
                     # wraps inside its column instead of overflowing the table.
-                    Paragraph(", ".join(trade.tags) if trade.tags else "", cell),
+                    #
+                    # escape() because Paragraph parses its text as reportlab
+                    # markup: an ordinary tag like "A&B" is otherwise read as an
+                    # entity and silently vanishes from the PDF, and "<swing>"
+                    # is read as an unknown element and dropped. The export
+                    # still succeeded, which made it worse than a crash - you
+                    # got a clean-looking file with tags missing.
+                    Paragraph(escape(", ".join(trade.tags)) if trade.tags else "", cell),
                 ]
             )
 
