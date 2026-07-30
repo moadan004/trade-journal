@@ -3,7 +3,10 @@
 import { useCallback, useEffect, useState } from "react";
 
 import { deleteTrade, listTradesByDate } from "@/lib/api";
+import { checklistScore } from "@/lib/checklist";
+import { formatR, tradeR } from "@/lib/risk";
 import { Modal } from "@/components/Modal";
+import { ScreenshotLightbox } from "@/components/ScreenshotLightbox";
 import { TradeFormModal } from "@/components/TradeFormModal";
 import type { AccountRead } from "@/types/account";
 import type { TradeRead } from "@/types/trade";
@@ -25,6 +28,7 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
   const [error, setError] = useState<string | null>(null);
   const [formMode, setFormMode] = useState<"add" | TradeRead | null>(null);
   const [confirmingId, setConfirmingId] = useState<number | null>(null);
+  const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
 
   const load = useCallback(() => {
     listTradesByDate(date)
@@ -110,9 +114,20 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                     <p className="font-semibold text-zinc-900 dark:text-zinc-100">
                       {trade.symbol}{" "}
                       <span className="font-normal text-zinc-500 dark:text-zinc-400">· {trade.side}</span>
+                      {trade.setup_tag && (
+                        <span className="ml-1.5 rounded-full bg-zinc-100 px-2 py-0.5 text-[11px] font-medium text-zinc-600 dark:bg-zinc-800 dark:text-zinc-300">
+                          {trade.setup_tag}
+                        </span>
+                      )}
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
                       {formatTime(trade.entry_time)} → {trade.exit_time ? formatTime(trade.exit_time) : "open"}
+                      {trade.checklist_json && (
+                        <span className="ml-2">
+                          · checklist {checklistScore(trade.checklist_json).checked}/
+                          {checklistScore(trade.checklist_json).total}
+                        </span>
+                      )}
                     </p>
                   </div>
                   <p
@@ -125,8 +140,30 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
                     }`}
                   >
                     {trade.pnl >= 0 ? "+" : "-"}${Math.abs(trade.pnl).toFixed(2)}
+                    {tradeR(trade) !== null && (
+                      <span className="ml-2 font-normal text-zinc-500 dark:text-zinc-400">
+                        {formatR(tradeR(trade)!)}
+                      </span>
+                    )}
                   </p>
                 </div>
+
+                {trade.screenshot_url && (
+                  <button
+                    type="button"
+                    onClick={() => setLightboxSrc(trade.screenshot_url)}
+                    aria-label="Enlarge trade screenshot"
+                    className="mt-2 block overflow-hidden rounded-lg border border-zinc-200 transition-opacity hover:opacity-80 dark:border-zinc-700"
+                  >
+                    {/* Runtime upload path; next/image can't optimize it. */}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={trade.screenshot_url}
+                      alt={`${trade.symbol} chart`}
+                      className="h-20 w-32 object-cover"
+                    />
+                  </button>
+                )}
 
                 <div className="mt-2 flex items-center gap-3 text-xs">
                   <button
@@ -179,6 +216,8 @@ export function DayDetailDrawer({ date, accounts, onClose, onChanged }: DayDetai
           onSaved={handleSaved}
         />
       )}
+
+      {lightboxSrc && <ScreenshotLightbox src={lightboxSrc} onClose={() => setLightboxSrc(null)} />}
     </>
   );
 }

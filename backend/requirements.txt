@@ -13,5 +13,8 @@ google-auth==2.36.0
 requests==2.32.3
 python-dotenv==1.0.1
 python-multipart==0.0.32
+# Pure Python: no cairo/pango system libs, so the Render build stays simple.
+# (WeasyPrint would need them.)
+reportlab==4.2.5
 httpx==0.28.1
 pytest==8.3.4

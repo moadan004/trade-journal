@@ -25,7 +25,7 @@ performed** — that needs Render/Vercel/Google Cloud account access.
 /backend    FastAPI app (routers/, models/, schemas/, core/, services/, alembic/)
 /frontend   Next.js app (login/register pages, calendar dashboard, analytics)
 docker-compose.yml   Local Postgres for development
-render.yaml          Render Blueprint: backend web service + Postgres
+render.yaml          Render Blueprint: backend web service (external Postgres via DATABASE_URL)
 plan.md              Full product/build plan
 ```
 
@@ -39,7 +39,7 @@ docker compose up -d postgres
 
 This starts Postgres 16 on `localhost:5432` with user/password/db all set to
 `trade_journal` (see `docker-compose.yml`). If you'd rather use an existing local
-Postgres install or a hosted instance (e.g. Render), just point `DATABASE_URL` at it instead.
+Postgres install or a hosted instance (e.g. Supabase), just point `DATABASE_URL` at it instead.
 
 ### 2. Configure environment
 
@@ -88,7 +88,15 @@ The API is now live at `http://localhost:8000` (interactive docs at `/docs`).
 | DELETE | `/trades/{id}`                | Delete a trade                            |
 | GET    | `/stats/calendar?month=YYYY-MM` | Per-day P&L/trade-count/win-rate for a month (optional `account_id`, `tags=`) |
 | GET    | `/stats/summary`              | Aggregate stats + equity curve for an optional `start`/`end`/`account_id`/`tags` range |
+| GET    | `/stats/risk`                 | Max drawdown + drawdown curve, R-multiple histogram, win/loss/current streaks (same filters) |
+| GET    | `/stats/sessions`             | Per-session trade count, win rate and avg P&L, bucketed by entry hour in UTC (same filters) |
 | POST   | `/trades/import`              | Bulk-import trades from a CSV (multipart: `file`, `account_id`, optional `tag`) |
+| GET    | `/reviews/{date}`             | The weekly review covering `date`, or a blank template if none written yet |
+| POST   | `/reviews`                    | Create a weekly review (409 if one already exists for that week) |
+| PUT    | `/reviews/{date}`             | Upsert the weekly review covering `date` |
+| GET    | `/trades/export`              | Download filtered trades as `format=csv` or `format=pdf` (optional `start`/`end`/`account_id`) |
+| POST   | `/trades/{id}/screenshot`     | Attach a chart image (multipart `file`), replacing any existing one |
+| DELETE | `/trades/{id}/screenshot`     | Remove a trade's screenshot |
 
 Also `POST /auth/logout` (clears the auth cookie) and `GET /auth/me` (returns the
 signed-in user, or 401).
@@ -98,8 +106,104 @@ All routes except `/auth/register`, `/auth/login`, `/auth/google`, `/auth/logout
 cookie**, with an `Authorization: Bearer <token>` header still accepted as a
 transitional fallback — see [How auth is stored](#how-auth-is-stored-httponly-cookie).
 
-`tags` on both stats endpoints is a comma-separated list matched with Postgres array
-overlap (`&&`) — a trade matches if it has **any** of the given tags.
+`tags` on the stats endpoints is a comma-separated list matched with Postgres array
+overlap (`&&`) — a trade matches if it has **any** of the given tags. `setup_tag` is a
+separate filter matched **exactly**, since a trade has at most one setup.
+
+### Journal & discipline
+
+**`setup_tag`** is the setup traded — one per trade, kept deliberately separate from the
+multi-valued `tags` array. Folding it in would make "group by setup" ambiguous for any
+trade carrying several tags. The form suggests common setups via a datalist but accepts
+free text, so logging a new setup you're trying out isn't blocked.
+
+**`checklist_json`** stores the pre-trade discipline answers as `{item_key: bool}`. JSONB
+rather than four columns because the item list is expected to change and a schema
+migration per checklist edit would be absurd. The four current items live in
+`frontend/src/lib/checklist.ts`.
+
+Both are nullable — trades logged before Phase 7, and every CSV import, have `NULL`. The
+form only sends `checklist_json` when the checkboxes actually changed from what was
+loaded, so editing a trade for an unrelated reason can't fabricate an all-false record of
+discipline answers nobody gave.
+
+**Weekly reviews** are one free-text reflection per user per week, keyed by the **Monday**
+of the week. Every route accepts any date within the target week and normalizes it
+server-side, so Tuesday and Wednesday can't address two different rows; a unique
+constraint on `(user_id, week_start_date)` enforces that in the database, and the `PUT`
+upsert recovers from the race that constraint exists to catch. `GET` returns a blank
+template rather than 404 so the client always has a field to bind to.
+
+> **Known inconsistency:** `/reviews` uses Monday-based weeks (matching the backend),
+> while the dashboard's "this week's P&L" card uses Sunday-based weeks
+> (`getThisWeekRange` in `lib/dateRanges.ts`). Left as-is rather than silently shifting a
+> number that's already on screen; worth unifying deliberately at some point.
+
+### Risk metrics
+
+`risk_amount` on a trade is the money at risk from entry to stop, in account currency.
+It's **nullable** — every trade logged before it existed, and every CSV import (broker
+exports don't carry a risk column), has `NULL`. Add it from the trade form; editing an
+existing trade is the backfill mechanism.
+
+R is **derived on read** as `pnl / risk_amount`, not stored, so it can't drift from the
+P&L it describes. The long-dormant `r_multiple` column is now an explicit override: it
+wins when set, which covers trades where you know R but not the dollar risk. A
+`risk_amount` of zero or less counts as missing rather than being divided by.
+
+Because trades without risk data are simply absent from the R histogram, `/stats/risk`
+returns `trades_with_risk` and `trades_missing_risk` alongside it, and the UI shows both
+— an R distribution built from 3 of 200 trades is easy to over-read without that count.
+
+Drawdown is measured on cumulative P&L starting at zero, not on account balance: the app
+never records a starting balance or deposits. A losing first trade is therefore in
+drawdown immediately. Streaks use trade status in close order, and a breakeven **ends** a
+streak without starting one — treating it as neutral would silently merge two wins around
+a scratch into a 2-streak.
+
+Sessions bucket on `entry_time` in UTC (the session is a property of when you took the
+setup): Asian `00–08`, London `08–13`, London/NY overlap `13–16`, New York `16–21`,
+off-hours `21–00`.
+
+### Screenshots
+
+Images are written to `backend/uploads/screenshots/` (gitignored, configurable via
+`UPLOAD_DIR`) and served from a `/uploads` static mount. Both the Next dev server and
+Vercel proxy `/uploads/*` to the backend alongside `/api/*`, so the stored URL stays a
+plain backend-relative path with no frontend routing baked into it.
+
+> ⚠️ **Uploads do not survive a deploy on Render.** The free tier's filesystem is
+> ephemeral — every deploy and every restart wipes it, and `screenshot_url` will then
+> point at a file that no longer exists. This is fine for local use; before relying on
+> it in production, move to a Render persistent disk or S3-compatible storage.
+
+Three things the upload path deliberately doesn't trust:
+
+- **The client's filename.** Stored names are generated (`uuid4().hex` + a whitelisted
+  extension), so `../../` in a filename can't escape the upload directory.
+- **The client's `Content-Type`.** It's trivially forged, and what a browser does with a
+  file depends on its bytes, so the format is sniffed from magic bytes instead.
+- **SVG.** Rejected outright. It can carry `<script>`, and these files are served from the
+  app's own origin, so accepting SVG would turn "upload a screenshot" into stored XSS
+  against yourself. PNG, JPEG, GIF and WebP only, 5MB cap (`MAX_UPLOAD_BYTES`).
+
+### Export
+
+`GET /trades/export?format=csv|pdf`. CSV carries the full record (15 columns, including
+the derived R) and is UTF-8 with a BOM so Excel reads non-ASCII correctly — the same
+encoding the importer accepts. The PDF is a summary artifact rather than an interchange
+format: date, symbol, side, P&L and tags, with a header line of trade count, net P&L and
+win rate. It's built with **reportlab**, which is pure Python — WeasyPrint would drag
+cairo/pango into the Render build.
+
+### Multi-account comparison
+
+`GET /stats/summary` accepts a repeatable `account_ids` parameter. The top-level figures
+stay the combined total across whatever is selected, and `by_account` adds the same
+figures per account. Both go through one shared aggregation function, so the breakdown
+can't drift from the total it decomposes. Accounts with no trades in range still get a
+zeroed entry rather than disappearing. Omitting `account_ids` leaves `by_account` empty,
+so single-account callers see no change.
 
 ### CSV import format
 
@@ -265,6 +369,17 @@ The app is now live at `http://localhost:3000`.
   breakdown), avg win vs. avg loss, profit factor (gross profit / gross loss, "—" when
   there are no losing trades in range), and a Recharts equity curve (cumulative P&L,
   one point per trade, straight segments — no smoothing) built from `GET /stats/summary`.
+- **Risk section on `/analytics`** — max drawdown, average R (with best/worst), and
+  current streak as stat cards; an underwater drawdown area chart; an R-multiple
+  histogram coloured by win/loss with the count of trades excluded for want of risk
+  data; and a session-breakdown table (a table, not a chart, because the comparison
+  spans three different units). Sessions with no trades stay listed — "I never trade
+  the Asian session" is itself a finding. All three panels are fetched together with
+  identical filters, so they always describe the same set of trades.
+- **Risk on the trade form** — optional `Risk` input with a live R preview. Editing a
+  trade without touching side, prices or size preserves its stored P&L rather than
+  recomputing it, so backfilling risk onto a CSV-imported trade can't overwrite the
+  broker's figure (which includes swap and commission and won't reproduce from prices).
 - **CSV import** — "Import CSV" button on the dashboard (prompts account creation first
   if you have none yet). Upload a trade-history CSV, optionally tag every imported trade,
   and see a summary of rows imported vs. skipped (with reasons) before it refreshes your
@@ -275,6 +390,25 @@ The app is now live at `http://localhost:3000`.
 - **Mobile-responsive calendar** — day cells condense (P&L only, counts/win-rate hidden)
   below the `sm` breakpoint, and the calendar grid supports touch swipe (left = next
   month, right = previous) alongside the existing arrow buttons.
+- **Pre-trade checklist and setup tag** — four fixed checkboxes on the trade form saved as
+  `checklist_json`, plus a setup input separate from instrument tags. Day-drawer trade rows
+  show the setup as a pill and a compact checklist score (e.g. "3/4").
+- **`/reviews`** — the week's P&L, win rate and profit factor above a free-text reflections
+  box, with arrow navigation between weeks. Saving is explicit rather than autosave (with
+  an unsaved-changes indicator), so a half-written thought isn't persisted mid-sentence.
+- **Setup filter on `/analytics`** — a single-value input beside the tag filter, matching
+  the one-setup-per-trade model, applied to summary, risk and session panels together.
+- **Trade screenshots** — file picker with live preview in the trade form; thumbnail on
+  the trade row in the day drawer, click to enlarge in a lightbox (Escape or click-away
+  to close). A new trade has no id until saved, so the file is staged and uploaded once
+  the trade exists.
+- **Export** — CSV/PDF buttons on `/analytics` carrying the page's current date range and
+  account, so the download matches what's on screen. Fetched rather than linked: a plain
+  `<a download>` would write a JSON 401 body into the saved file and report success.
+- **Account comparison** — a "Compare accounts" option (shown once you have more than one
+  account) renders side-by-side per-account cards with the best and worst performer
+  flagged. Accounts you haven't traded this period keep a card, since that's itself worth
+  seeing.
 
 ### How auth is stored (httpOnly cookie)
 
@@ -337,9 +471,10 @@ Note that requests appear in devtools as `localhost:3000/api/...`, not
 
 ## Deploying
 
-Backend and database on **Render**, frontend on **Vercel**. The backend side is
-declared as code in [`render.yaml`](./render.yaml) so it's reviewable in git rather
-than living only in dashboard clicks.
+Backend web service on **Render**, external Postgres database on **Supabase** (or
+similar), and frontend on **Vercel**. The backend side is declared as code in
+[`render.yaml`](./render.yaml) so it's reviewable in git rather than living only in
+dashboard clicks.
 
 ### Ordering
 
@@ -348,30 +483,65 @@ Render first. (There is no dependency in the other direction — production need
 CORS, because the browser only talks to Vercel and the Vercel→Render hop is
 server-to-server.)
 
-### 1. Render — backend + Postgres
+### 1. Render — backend web service
 
 Render → **Blueprints** → **New Blueprint Instance** → point at this repo. `render.yaml`
-creates the Postgres instance and the `trade-journal-api` web service, wires
-`DATABASE_URL` from the database, generates a `JWT_SECRET`, and sets `COOKIE_SECURE=true`.
+creates only the `trade-journal-api` web service; it does **not** create a
+Render-managed Postgres database. Use an external Postgres provider instead
+(Supabase or similar). The blueprint generates a `JWT_SECRET` and sets
+`COOKIE_SECURE=true`.
 
-Two variables are marked `sync: false` and must be set by hand in the dashboard:
+Three variables are marked `sync: false` and must be set by hand in the dashboard
+during blueprint deploy:
 
 | Variable | Value |
 |---|---|
+| `DATABASE_URL` | external Postgres connection string (for example, Supabase) |
 | `GOOGLE_CLIENT_ID` | your OAuth Client ID (same value the frontend uses) |
 | `CORS_ORIGINS` | optional — see note below |
+
+The service **crash-loops if `DATABASE_URL` is missing or wrong**, because migrations run
+in `startCommand` — a deploy that never turns healthy usually means checking that value
+first.
+
+#### Which Supabase connection string to copy
+
+Supabase's dashboard offers three, and they are **not** interchangeable here:
+
+| Option | Use it? | Why |
+|---|---|---|
+| **Session pooler** — port `5432`, host `aws-*.pooler.supabase.com` | ✅ **this one** | IPv4, one server connection per client session |
+| Transaction pooler — port `6543` | ⚠️ see below | transaction-mode pooling has historically not supported prepared statements |
+| Direct — `db.*.supabase.co:5432` | ⚠️ | fine if it resolves, but newer projects expose it over IPv6 only, which Render may not route outbound |
+
+The transaction pooler is the one worth understanding, because it *appears* to work.
+psycopg 3 prepares a statement automatically once the same query repeats
+(`prepare_threshold` defaults to 5), so failures show up as intermittent
+`prepared statement "..." already exists` errors under traffic rather than a clean error
+at startup. Pooler capabilities do change between versions — if you have a reason to use
+the transaction pooler, disable prepared statements on our side instead of fighting it:
+pass `connect_args={"prepare_threshold": None}` to `create_engine` in
+`backend/app/core/database.py`.
 
 Note the URL Render assigns the service, e.g. `https://trade-journal-api.onrender.com`.
 
 Things `render.yaml` already handles that are easy to get wrong by hand:
 
-- **Migrations run as a pre-deploy step**, not in `startCommand`. In the start command
-  they'd re-run on every restart and every scaled instance; as pre-deploy they run once
-  per deploy and a failure aborts the deploy rather than crash-looping the service.
-- **Render exposes Postgres as `postgres://...`**, which SQLAlchemy doesn't accept —
-  and even `postgresql://` would resolve to psycopg2, which isn't installed. The app
-  normalizes either form to `postgresql+psycopg://` at load time
-  (`backend/app/core/config.py`), so no manual URL editing is needed.
+- **Migrations run in `startCommand`**, chained ahead of uvicorn:
+  `alembic upgrade head && uvicorn ...`. Render's **free tier rejects
+  `preDeployCommand`** ("pre-deploy command is not supported for free tier services"),
+  which is where this otherwise belongs — move it back if you upgrade the plan.
+  Two things to know about the free-tier arrangement: migrations re-run on every start
+  (including the wake-up from idle spin-down, where `alembic upgrade head` is a cheap
+  no-op once the DB is at head), and a failing migration **crash-loops the service**
+  instead of aborting the deploy and leaving the old version serving — so a deploy that
+  never goes healthy means checking the logs for an Alembic error. The `&&` is
+  deliberate: if the migration fails, uvicorn never starts, which beats serving against
+  a schema the code doesn't expect.
+- **Postgres URL schemes are normalized by the app.** If your external provider gives
+  you `postgres://...` or `postgresql://...`, the app normalizes either form to
+  `postgresql+psycopg://` at load time (`backend/app/core/config.py`), so no manual
+  URL editing is needed.
 - **`backend/runtime.txt` pins Python 3.12**, so Render doesn't pick a different default.
 
 ### 2. Vercel — frontend
@@ -413,6 +583,6 @@ Deploying isn't done until this passes end-to-end in production:
 5. In devtools → Network, confirm requests go to your Vercel origin under `/api/*` and
    not to the Render domain.
 
-Two things to expect on Render's free tier: the service **spins down when idle**, so the
-first request after a quiet period is slow, and free Postgres has retention/lifetime
-limits — check Render's current terms before trusting it with trade data you care about.
+Expect Render's free web service to **spin down when idle**, so the first request after
+a quiet period is slow. Database retention, lifetime, and connection limits depend on
+your external Postgres provider (Supabase or similar), not Render-managed Postgres.

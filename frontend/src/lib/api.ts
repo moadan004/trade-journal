@@ -1,7 +1,8 @@
 import type { AccountCreateInput, AccountRead } from "@/types/account";
 import type { ImportResult } from "@/types/importResult";
+import type { WeeklyReviewRead } from "@/types/review";
 import type { CalendarStatsResponse } from "@/types/stats";
-import type { SummaryStatsResponse } from "@/types/summary";
+import type { RiskStatsResponse, SessionStatsResponse, SummaryStatsResponse } from "@/types/summary";
 import type { TradeCreateInput, TradeRead, TradeUpdateInput } from "@/types/trade";
 import type { UserRead } from "@/types/user";
 
@@ -104,7 +105,7 @@ export function getCalendarStats(
   const query = buildQuery({
     month,
     account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
   });
   return request<CalendarStatsResponse>(`/stats/calendar${query}`);
 }
@@ -114,16 +115,42 @@ interface SummaryStatsFilters {
   end?: string;
   accountId?: number;
   tags?: string[];
+  setupTag?: string;
+  /** Restricts to these accounts and asks for a per-account breakdown. */
+  accountIds?: number[];
 }
 
 export function getSummaryStats(filters: SummaryStatsFilters = {}): Promise<SummaryStatsResponse> {
-  const query = buildQuery({
+  // statsQuery, not a local buildQuery call: it is what carries setup_tag, and
+  // /risk and /sessions already go through it. Building the string separately
+  // here is how summary silently stopped honouring the setup filter while the
+  // other two panels still did.
+  const query = statsQuery(filters);
+  // account_ids is repeated rather than comma-joined, so it can't go through
+  // buildQuery's single-value map.
+  const repeated = (filters.accountIds ?? []).map((id) => `account_ids=${id}`).join("&");
+  const url = repeated ? `/stats/summary${query ? `${query}&` : "?"}${repeated}` : `/stats/summary${query}`;
+  return request<SummaryStatsResponse>(url);
+}
+
+// /risk and /sessions take exactly the same filters as /summary, so the three
+// analytics panels always describe the same set of trades.
+function statsQuery(filters: SummaryStatsFilters): string {
+  return buildQuery({
     start: filters.start,
     end: filters.end,
     account_id: filters.accountId,
-    tags: filters.tags && filters.tags.length > 0 ? filters.tags.join(",") : undefined,
+    tags: filters.tags?.length ? filters.tags.join(",") : undefined,
+    setup_tag: filters.setupTag || undefined,
   });
-  return request<SummaryStatsResponse>(`/stats/summary${query}`);
+}
+
+export function getRiskStats(filters: SummaryStatsFilters = {}): Promise<RiskStatsResponse> {
+  return request<RiskStatsResponse>(`/stats/risk${statsQuery(filters)}`);
+}
+
+export function getSessionStats(filters: SummaryStatsFilters = {}): Promise<SessionStatsResponse> {
+  return request<SessionStatsResponse>(`/stats/sessions${statsQuery(filters)}`);
 }
 
 export function listAccounts(): Promise<AccountRead[]> {
@@ -150,6 +177,19 @@ export function deleteTrade(id: number): Promise<void> {
   return request<void>(`/trades/${id}`, { method: "DELETE" });
 }
 
+/** `date` is any day in the target week; the server normalizes to that week's Monday. */
+export function getWeeklyReview(date: string): Promise<WeeklyReviewRead> {
+  return request<WeeklyReviewRead>(`/reviews/${date}`);
+}
+
+/** Upsert - creates the week's review if it doesn't exist yet, updates it if it does. */
+export function saveWeeklyReview(date: string, reflections: string): Promise<WeeklyReviewRead> {
+  return request<WeeklyReviewRead>(`/reviews/${date}`, {
+    method: "PUT",
+    body: JSON.stringify({ reflections }),
+  });
+}
+
 export async function importTradesCsv(
   file: File,
   accountId: number,
@@ -171,4 +211,64 @@ export async function importTradesCsv(
   if (!res.ok) throw await extractError(res);
 
   return (await res.json()) as ImportResult;
+}
+
+export async function uploadScreenshot(tradeId: number, file: File): Promise<TradeRead> {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  // Same reason as importTradesCsv: FormData must set its own multipart
+  // boundary, so this can't go through request().
+  const res = await fetch(`${API_BASE}/trades/${tradeId}/screenshot`, {
+    method: "POST",
+    body: formData,
+    credentials: "include",
+  });
+
+  if (!res.ok) throw await extractError(res);
+  return (await res.json()) as TradeRead;
+}
+
+export function deleteScreenshot(tradeId: number): Promise<TradeRead> {
+  return request<TradeRead>(`/trades/${tradeId}/screenshot`, { method: "DELETE" });
+}
+
+export interface ExportFilters {
+  start?: string;
+  end?: string;
+  accountId?: number;
+}
+
+/**
+ * Download the filtered trades as a file.
+ *
+ * Fetched rather than linked so the auth cookie and any error response are
+ * handled the same way as everything else - a plain <a download> would render
+ * a JSON 401 body into the saved file without ever reporting a failure.
+ */
+export async function exportTrades(format: "csv" | "pdf", filters: ExportFilters = {}): Promise<void> {
+  const query = buildQuery({
+    format,
+    start: filters.start,
+    end: filters.end,
+    account_id: filters.accountId,
+  });
+
+  const res = await fetch(`${API_BASE}/trades/export${query}`, { credentials: "include" });
+  if (!res.ok) throw await extractError(res);
+
+  const blob = await res.blob();
+  const filename =
+    /filename="([^"]+)"/.exec(res.headers.get("content-disposition") ?? "")?.[1] ?? `trades.${format}`;
+
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = filename;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  // Revoking immediately can cancel the download in some browsers; one tick is
+  // enough for the click to have been dispatched.
+  setTimeout(() => URL.revokeObjectURL(url), 0);
 }

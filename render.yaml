@@ -1,19 +1,13 @@
 # Render Blueprint - https://render.com/docs/blueprint-spec
 #
-# Declares the backend web service and its Postgres database so the setup is
-# reviewable in git rather than living only in dashboard clicks. Apply it via
+# Declares the backend web service so the setup is reviewable in git rather
+# than living only in dashboard clicks. Apply it via
 # Render -> Blueprints -> New Blueprint Instance, pointed at this repo.
 #
 # NOTE: this covers the backend only. The frontend deploys to Vercel, which is
-# configured separately (see the deploy runbook in README.md). Two values must be
-# set by hand after the first Vercel deploy, because the Vercel URL isn't known
-# until then - both are marked `sync: false` below.
-
-databases:
-  - name: trade-journal-db
-    databaseName: trade_journal
-    user: trade_journal
-    plan: free
+# configured separately (see the deploy runbook in README.md). DATABASE_URL must
+# be set by hand during blueprint deploy for an external Postgres provider. The
+# other sync: false values are filled in once the Vercel/Google OAuth details exist.
 
 services:
   - type: web
@@ -22,19 +16,48 @@ services:
     plan: free
     rootDir: backend
     buildCommand: pip install -r requirements.txt
-    # Migrations run as a pre-deploy step, not in startCommand. In startCommand
-    # they would re-run on every restart and on every scaled instance; here they
-    # run once per deploy and a failure aborts the deploy instead of crash-looping.
-    preDeployCommand: alembic upgrade head
-    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    # Migrations run in startCommand because Render's free tier rejects
+    # preDeployCommand ("pre-deploy command is not supported for free tier
+    # services"), which is where this belongs and where it should move if the
+    # service is ever upgraded.
+    #
+    # Consequences of running them here instead:
+    #  - They re-run on every start, including the wake-up from the free tier's
+    #    idle spin-down. `alembic upgrade head` is a no-op once the DB is at head,
+    #    so this costs a connection and a version check, not repeated work.
+    #  - A failing migration now crash-loops the service rather than aborting the
+    #    deploy and leaving the previous version serving. Check the logs on a
+    #    deploy that never turns healthy.
+    #  - `&&` means uvicorn never starts if the migration fails, which is the
+    #    behaviour you want: better down than serving against a schema the code
+    #    doesn't expect.
+    #  - If this service is ever scaled past one instance, every instance runs
+    #    migrations at once. Postgres DDL is transactional and Alembic takes a
+    #    lock, so they serialise rather than corrupt - but single-instance is the
+    #    assumption here, and the free tier enforces it anyway.
+    startCommand: alembic upgrade head && uvicorn app.main:app --host 0.0.0.0 --port $PORT
     healthCheckPath: /health
     envVars:
-      # Render exposes this as postgres://... - app.core.config normalizes the
-      # scheme to postgresql+psycopg:// at load time.
+      # Supply an external Postgres connection string (for example, Supabase)
+      # manually in Render during blueprint deploy. app.core.config normalizes
+      # postgres:// and postgresql:// schemes to postgresql+psycopg://.
+      #
+      # If the provider offers several connection strings, they are not
+      # interchangeable here. On Supabase, prefer the *session* pooler (port 5432,
+      # host aws-*.pooler.supabase.com):
+      #  - Session pooler: IPv4, one server connection per client session.
+      #  - Transaction pooler (port 6543): transaction-mode pooling historically
+      #    does not support prepared statements, and psycopg 3 issues them
+      #    automatically once a query repeats (prepare_threshold defaults to 5).
+      #    The symptom is intermittent "prepared statement ... already exists"
+      #    under repeat traffic, not a clean failure at boot. If you must use it,
+      #    disable them via connect_args={"prepare_threshold": None} in
+      #    app.core.database rather than fighting the pooler.
+      #  - Direct connection (db.*.supabase.co:5432): fine if it resolves, but
+      #    newer projects expose it over IPv6 only, which Render may not route
+      #    outbound.
       - key: DATABASE_URL
-        fromDatabase:
-          name: trade-journal-db
-          property: connectionString
+        sync: false
       - key: JWT_SECRET
         generateValue: true
       # Required: the auth cookie must be HTTPS-only in production.
