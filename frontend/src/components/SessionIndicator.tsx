@@ -6,10 +6,20 @@ import {
   formatCountdown,
   formatSessionWindow,
   isOverlapActive,
+  isWeekendClosure,
+  marketOpenInstant,
   sessionStates,
   OVERLAP_END_HOUR,
   OVERLAP_START_HOUR,
 } from "@/lib/sessions";
+
+/** "Sunday 21:00 UTC" - the reopen, spelled out so the countdown has a target. */
+function formatReopen(instant: Date): string {
+  const weekday = instant.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
+  const hour = String(instant.getUTCHours()).padStart(2, "0");
+  const minute = String(instant.getUTCMinutes()).padStart(2, "0");
+  return `${weekday} ${hour}:${minute} UTC`;
+}
 
 /**
  * How often the widget re-reads the clock. Labels are minute-resolution, so
@@ -75,11 +85,13 @@ export function SessionIndicator() {
   const now = new Date(tick);
   const states = sessionStates(now);
   const overlap = isOverlapActive(now);
+  const weekend = isWeekendClosure(now);
+  const reopen = marketOpenInstant(now);
 
   return (
-    <section aria-label="Trading sessions">
+    <section aria-label="Trading sessions" data-weekend={weekend}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {states.map(({ session, active, msUntilChange }) => (
+        {states.map(({ session, active, msUntilChange, weekendClosed }) => (
           <div
             key={session.id}
             data-testid={`session-${session.id}`}
@@ -122,11 +134,18 @@ export function SessionIndicator() {
             </p>
 
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
-              {active ? "until close" : "until open"} · {formatSessionWindow(session)}
+              {weekendClosed ? "until market opens" : active ? "until close" : "until open"} ·{" "}
+              {formatSessionWindow(session)}
             </p>
           </div>
         ))}
       </div>
+
+      {weekend && reopen && (
+        <p className="mt-2 text-xs text-amber-700 dark:text-amber-500">
+          Market closed for the weekend — reopens {formatReopen(reopen)}.
+        </p>
+      )}
 
       {overlap && (
         <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">

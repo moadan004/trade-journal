@@ -4,12 +4,17 @@ import {
   formatCountdown,
   formatSessionWindow,
   isOverlapActive,
+  isWeekendClosure,
   msOfUtcDay,
+  msUntilMarketOpen,
   sessionStates,
   TRADING_SESSIONS,
 } from "@/lib/sessions";
 
-/** A fixed UTC instant. The calendar date is arbitrary - only the UTC clock matters. */
+/**
+ * A fixed UTC instant on Wednesday 15 July 2026 - a plain mid-week day, so the
+ * hour-of-day tests are never perturbed by the weekend rule.
+ */
 function utc(hour: number, minute = 0, second = 0): Date {
   return new Date(Date.UTC(2026, 6, 15, hour, minute, second));
 }
@@ -180,6 +185,120 @@ describe("countdown to the next change", () => {
       const now = new Date(Date.UTC(2026, 6, 15, 0, minute));
       for (const state of sessionStates(now)) {
         expect(state.msUntilChange).toBeGreaterThan(0);
+      }
+    }
+  });
+});
+
+describe("weekend closure", () => {
+  // Verified against Intl: 17:00 New York is 21:00 UTC under EDT and 22:00 UTC
+  // under EST, so both halves of the year are pinned separately below.
+  const FRI_JUL = "2026-07-17"; // Friday
+  const SAT_JUL = "2026-07-18";
+  const SUN_JUL = "2026-07-19";
+
+  it("stays open right up to the Friday close", () => {
+    const justBefore = new Date(`${FRI_JUL}T20:59:59Z`);
+    expect(isWeekendClosure(justBefore)).toBe(false);
+    // New York is still running its 13:00-21:00 window.
+    expect(activeIds(justBefore)).toEqual(["new_york"]);
+    expect(msUntilMarketOpen(justBefore)).toBe(0);
+  });
+
+  it("shuts everything the moment Friday 17:00 New York arrives", () => {
+    const justAfter = new Date(`${FRI_JUL}T21:00:00Z`);
+    expect(isWeekendClosure(justAfter)).toBe(true);
+    expect(activeIds(justAfter)).toEqual([]);
+    // Friday close to Sunday open is a flat 48h when no DST change intervenes.
+    expect(msUntilMarketOpen(justAfter)).toBe(48 * HOUR);
+  });
+
+  it("reports every session closed on a Saturday, whatever the UTC hour", () => {
+    // The reported bug: 14:00 UTC on a Saturday sits inside both the London and
+    // New York windows, so hour-of-day alone showed them open.
+    const saturday = new Date(`${SAT_JUL}T14:00:00Z`);
+    expect(isWeekendClosure(saturday)).toBe(true);
+    expect(activeIds(saturday)).toEqual([]);
+    expect(isOverlapActive(saturday)).toBe(false);
+    // Sat 14:00 -> Sun 21:00 is 31h.
+    expect(msUntilMarketOpen(saturday)).toBe(31 * HOUR);
+  });
+
+  it("keeps every session closed across all 24 hours of Saturday", () => {
+    for (let hour = 0; hour < 24; hour++) {
+      const now = new Date(Date.UTC(2026, 6, 18, hour));
+      expect(activeIds(now)).toEqual([]);
+      expect(isOverlapActive(now)).toBe(false);
+    }
+  });
+
+  it("points every card at the weekly reopen, not its own next hour boundary", () => {
+    const saturday = new Date(`${SAT_JUL}T14:00:00Z`);
+    const states = sessionStates(saturday);
+
+    expect(states.map((s) => s.weekendClosed)).toEqual([true, true, true]);
+    // All three share one countdown - the market open - rather than 10h/18h/23h.
+    expect(new Set(states.map((s) => s.msUntilChange)).size).toBe(1);
+    expect(states[0].msUntilChange).toBe(31 * HOUR);
+  });
+
+  it("stays shut until the last second before Sunday's open", () => {
+    const justBefore = new Date(`${SUN_JUL}T20:59:59Z`);
+    expect(isWeekendClosure(justBefore)).toBe(true);
+    expect(activeIds(justBefore)).toEqual([]);
+    expect(msUntilMarketOpen(justBefore)).toBe(1000);
+  });
+
+  it("reopens exactly at Sunday 17:00 New York", () => {
+    const justAfter = new Date(`${SUN_JUL}T21:00:00Z`);
+    expect(isWeekendClosure(justAfter)).toBe(false);
+    expect(msUntilMarketOpen(justAfter)).toBe(0);
+
+    // 21:00 UTC is outside all three windows, so nothing is open yet - but the
+    // countdowns are hour-boundary ones again, not the weekend one.
+    const states = sessionStates(justAfter);
+    expect(states.every((s) => !s.weekendClosed)).toBe(true);
+    expect(stateOf(justAfter, "asian").msUntilChange).toBe(3 * HOUR); // Monday 00:00
+  });
+
+  it("follows New York rather than a fixed UTC hour, under EST", () => {
+    // January: 17:00 New York is 22:00 UTC, so 21:00 UTC Friday is still open.
+    expect(isWeekendClosure(new Date("2026-01-16T21:00:00Z"))).toBe(false);
+    expect(isWeekendClosure(new Date("2026-01-16T22:00:00Z"))).toBe(true);
+    expect(isWeekendClosure(new Date("2026-01-18T21:59:59Z"))).toBe(true);
+    expect(isWeekendClosure(new Date("2026-01-18T22:00:00Z"))).toBe(false);
+  });
+
+  it("handles the spring-forward weekend, when the clocks move mid-closure", () => {
+    // US DST starts 02:00 local on Sun 8 Mar 2026, inside the closure window, so
+    // the market shuts at 22:00 UTC (EST) and reopens at 21:00 UTC (EDT) - 47h,
+    // not 48. This is what the two-pass offset resolution is for.
+    expect(isWeekendClosure(new Date("2026-03-06T21:59:59Z"))).toBe(false);
+
+    const close = new Date("2026-03-06T22:00:00Z");
+    expect(isWeekendClosure(close)).toBe(true);
+    expect(msUntilMarketOpen(close)).toBe(47 * HOUR);
+
+    expect(isWeekendClosure(new Date("2026-03-08T20:59:59Z"))).toBe(true);
+    expect(isWeekendClosure(new Date("2026-03-08T21:00:00Z"))).toBe(false);
+  });
+
+  it("handles the fall-back weekend too", () => {
+    // DST ends 02:00 local on Sun 1 Nov 2026: shut 21:00 UTC (EDT), reopen
+    // 22:00 UTC (EST) - 49h.
+    const close = new Date("2026-10-30T21:00:00Z"); // Friday
+    expect(isWeekendClosure(close)).toBe(true);
+    expect(msUntilMarketOpen(close)).toBe(49 * HOUR);
+
+    expect(isWeekendClosure(new Date("2026-11-01T21:59:59Z"))).toBe(true);
+    expect(isWeekendClosure(new Date("2026-11-01T22:00:00Z"))).toBe(false);
+  });
+
+  it("leaves ordinary weekdays completely untouched", () => {
+    // Mon-Thu, every hour: the weekend rule must never fire.
+    for (let day = 13; day <= 16; day++) {
+      for (let hour = 0; hour < 24; hour++) {
+        expect(isWeekendClosure(new Date(Date.UTC(2026, 6, day, hour)))).toBe(false);
       }
     }
   });

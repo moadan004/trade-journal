@@ -37,11 +37,147 @@ const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
 
+/**
+ * The weekly close/open, anchored to 17:00 in New York.
+ *
+ * The convention is usually quoted as "Friday 5pm EST to Sunday 5pm EST", but
+ * it tracks New York *local* time, so the UTC hour moves with US DST: 21:00 UTC
+ * while EDT is in force, 22:00 UTC under EST. Hard-coding either one would be
+ * wrong for half the year - which is the same class of bug as ignoring the day
+ * of week - so the boundary is resolved through the IANA zone.
+ *
+ * Note this makes the weekend boundary DST-aware while the session hours above
+ * stay fixed UTC. That asymmetry is deliberate: the weekly close is a hard
+ * market-wide fact, whereas the session windows are conventional approximations
+ * that everyone quotes in round UTC hours.
+ */
+export const MARKET_TIME_ZONE = "America/New_York";
+export const MARKET_BOUNDARY_HOUR_NY = 17;
+const FRIDAY = 5;
+const SATURDAY = 6;
+const SUNDAY = 0;
+
+const WEEKDAY_INDEX: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+const NY_FORMAT = new Intl.DateTimeFormat("en-US", {
+  timeZone: MARKET_TIME_ZONE,
+  weekday: "short",
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+  hour: "2-digit",
+  minute: "2-digit",
+  second: "2-digit",
+  // h23 rather than hour12:false - some ICU builds render midnight as "24".
+  hourCycle: "h23",
+});
+
+interface NyClock {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  second: number;
+  /** 0 = Sunday. */
+  weekday: number;
+}
+
+/** The New York wall clock at a given instant. */
+function nyClock(date: Date): NyClock {
+  const parts: Record<string, string> = {};
+  for (const part of NY_FORMAT.formatToParts(date)) parts[part.type] = part.value;
+
+  return {
+    year: Number(parts.year),
+    month: Number(parts.month),
+    day: Number(parts.day),
+    hour: Number(parts.hour),
+    minute: Number(parts.minute),
+    second: Number(parts.second),
+    weekday: WEEKDAY_INDEX[parts.weekday],
+  };
+}
+
+/** ms to add to a UTC instant to get the New York wall clock reading. */
+function nyOffset(date: Date): number {
+  const c = nyClock(date);
+  return Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second) - date.getTime();
+}
+
+/**
+ * The UTC instant at which New York's wall clock reads the given date at `hour`.
+ *
+ * Resolved twice because the offset depends on the very instant being solved
+ * for: the first guess uses the offset at the naive time, the second uses the
+ * offset actually in force at that guess.
+ *
+ * For the 17:00 boundary this repo uses, one pass would in fact be enough - the
+ * US switches at 02:00 local, i.e. 06:00/07:00 UTC on the Sunday, which is
+ * always earlier than a 17:00-local target resolves to. Removing the second pass
+ * currently breaks no test. It is kept because MARKET_BOUNDARY_HOUR_NY is an
+ * exported constant: point it near a changeover and the single-pass version
+ * would start returning an hour-shifted instant with nothing to catch it.
+ */
+function instantAtNyHour(year: number, month: number, day: number, hour: number): number {
+  const naive = Date.UTC(year, month - 1, day, hour);
+  const firstGuess = naive - nyOffset(new Date(naive));
+  return naive - nyOffset(new Date(firstGuess));
+}
+
+/** True while the whole FX market is shut for the weekend. */
+export function isWeekendClosure(now: Date): boolean {
+  const { weekday, hour } = nyClock(now);
+
+  if (weekday === SATURDAY) return true;
+  if (weekday === FRIDAY) return hour >= MARKET_BOUNDARY_HOUR_NY;
+  if (weekday === SUNDAY) return hour < MARKET_BOUNDARY_HOUR_NY;
+  return false;
+}
+
+/** ms until the market reopens. 0 when it is already open. */
+export function msUntilMarketOpen(now: Date): number {
+  if (!isWeekendClosure(now)) return 0;
+
+  const c = nyClock(now);
+  // Days forward to Sunday in New York's calendar. Friday and Saturday look
+  // ahead; a Sunday before 17:00 opens later the same day.
+  const daysAhead = c.weekday === SUNDAY ? 0 : 7 - c.weekday;
+
+  // Normalize the target date through Date.UTC so month/year roll over for us.
+  const target = new Date(Date.UTC(c.year, c.month - 1, c.day + daysAhead));
+
+  const openInstant = instantAtNyHour(
+    target.getUTCFullYear(),
+    target.getUTCMonth() + 1,
+    target.getUTCDate(),
+    MARKET_BOUNDARY_HOUR_NY,
+  );
+
+  return openInstant - now.getTime();
+}
+
+/** The reopen instant, for labelling the banner. Null while the market is open. */
+export function marketOpenInstant(now: Date): Date | null {
+  const ms = msUntilMarketOpen(now);
+  return ms > 0 ? new Date(now.getTime() + ms) : null;
+}
+
 export interface SessionState {
   session: TradingSession;
   active: boolean;
   /** ms until this session closes (when active) or next opens (when inactive). */
   msUntilChange: number;
+  /** True when the countdown targets the weekly reopen, not an hour boundary. */
+  weekendClosed: boolean;
 }
 
 /** Milliseconds elapsed since 00:00 UTC today. */
@@ -55,6 +191,13 @@ export function msOfUtcDay(now: Date): number {
 }
 
 export function sessionState(session: TradingSession, now: Date): SessionState {
+  // Layered on top of - not replacing - the hour logic below: no session can be
+  // open while the market is shut, whatever the UTC hour says, and every card
+  // then counts down to the weekly reopen rather than its own next boundary.
+  if (isWeekendClosure(now)) {
+    return { session, active: false, msUntilChange: msUntilMarketOpen(now), weekendClosed: true };
+  }
+
   const elapsed = msOfUtcDay(now);
   const start = session.startHour * MS_PER_HOUR;
   const end = session.endHour * MS_PER_HOUR;
@@ -63,11 +206,11 @@ export function sessionState(session: TradingSession, now: Date): SessionState {
   // 16:00 UTC London is closed and New York is open, never both or neither.
   const active = elapsed >= start && elapsed < end;
 
-  if (active) return { session, active, msUntilChange: end - elapsed };
+  if (active) return { session, active, msUntilChange: end - elapsed, weekendClosed: false };
 
   // Already past today's open, so the next one is tomorrow's.
   const nextOpen = elapsed < start ? start : start + MS_PER_DAY;
-  return { session, active, msUntilChange: nextOpen - elapsed };
+  return { session, active, msUntilChange: nextOpen - elapsed, weekendClosed: false };
 }
 
 export function sessionStates(now: Date): SessionState[] {
@@ -76,6 +219,10 @@ export function sessionStates(now: Date): SessionState[] {
 
 /** True when London and New York are both open - the 13:00-16:00 UTC window. */
 export function isOverlapActive(now: Date): boolean {
+  // There is no overlap when nothing is open; the window falls on a weekend
+  // whenever Saturday or Sunday passes through 13:00-16:00 UTC.
+  if (isWeekendClosure(now)) return false;
+
   const elapsed = msOfUtcDay(now);
   return elapsed >= OVERLAP_START_HOUR * MS_PER_HOUR && elapsed < OVERLAP_END_HOUR * MS_PER_HOUR;
 }
