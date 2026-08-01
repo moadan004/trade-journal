@@ -69,7 +69,7 @@ jobs:
         run: pytest tests/ -v
 
   frontend:
-    name: Frontend (lint + typecheck)
+    name: Frontend (lint + typecheck + tests)
     runs-on: ubuntu-latest
 
     defaults:
@@ -96,3 +96,6 @@ jobs:
 
       - name: Typecheck
         run: npx tsc --noEmit
+
+      - name: Unit tests
+        run: npm test
