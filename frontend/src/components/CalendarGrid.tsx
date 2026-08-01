@@ -1,6 +1,6 @@
 "use client";
 
-import { DayCell } from "@/components/DayCell";
+import { DAY_CELL_ASPECT, DayCell } from "@/components/DayCell";
 import { formatDateParam, getCalendarCells } from "@/lib/calendar";
 import { useSwipe } from "@/lib/useSwipe";
 import type { DailyStat } from "@/types/stats";
@@ -32,7 +32,7 @@ export function CalendarGrid({
 
   return (
     <div {...swipeHandlers} data-testid="calendar-swipe-area">
-      <div className="mb-2 grid grid-cols-7 gap-1 sm:gap-2">
+      <div className="mb-1.5 grid grid-cols-7 gap-1 sm:gap-1.5">
         {WEEKDAY_LABELS.map((label) => (
           <div
             key={label}
@@ -43,9 +43,9 @@ export function CalendarGrid({
         ))}
       </div>
 
-      <div className="grid grid-cols-7 gap-1 sm:gap-2">
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
         {cells.map((day, i) => {
-          if (day === null) return <div key={`blank-${i}`} className="aspect-square" />;
+          if (day === null) return <div key={`blank-${i}`} className={DAY_CELL_ASPECT} />;
           const dateStr = formatDateParam(year, month, day);
           return (
             <DayCell
