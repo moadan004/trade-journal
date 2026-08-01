@@ -14,8 +14,7 @@ import {
   marketOpenInstant,
   resolvedTimeZone,
   sessionStates,
-  OVERLAP_END_HOUR,
-  OVERLAP_START_HOUR,
+  OVERLAP_WINDOW,
 } from "@/lib/sessions";
 
 /**
@@ -155,8 +154,10 @@ export function SessionIndicator() {
 
       {overlap && (
         <p className="mt-2 text-xs text-emerald-700 dark:text-emerald-400">
-          London/New York overlap ({OVERLAP_START_HOUR}:00-{OVERLAP_END_HOUR}:00 UTC) — typically the
-          most active window of the day.
+          {/* Converted like the cards above it. Left in UTC this was the one
+              line still quoting a different clock from everything around it. */}
+          London/New York overlap ({formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, now))}) —
+          typically the most active window of the day.
         </p>
       )}
 

@@ -33,6 +33,21 @@ export const TRADING_SESSIONS: TradingSession[] = [
 export const OVERLAP_START_HOUR = 13;
 export const OVERLAP_END_HOUR = 16;
 
+/**
+ * The overlap shaped like a session, purely so it converts to local time
+ * through the same path as the three real ones.
+ *
+ * Deliberately NOT part of TRADING_SESSIONS: it is derived from London and New
+ * York rather than a fourth market, so it must not become a fourth card, and it
+ * must not be double-counted by anything walking the session list.
+ */
+export const OVERLAP_WINDOW: TradingSession = {
+  id: "overlap",
+  name: "London/New York overlap",
+  startHour: OVERLAP_START_HOUR,
+  endHour: OVERLAP_END_HOUR,
+};
+
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const MS_PER_DAY = 24 * MS_PER_HOUR;

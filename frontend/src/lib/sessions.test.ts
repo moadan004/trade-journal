@@ -9,6 +9,7 @@ import {
   isWeekendClosure,
   localSessionWindow,
   localZoneLabel,
+  OVERLAP_WINDOW,
   msOfUtcDay,
   msUntilMarketOpen,
   resolvedTimeZone,
@@ -366,6 +367,51 @@ describe("local-time display", () => {
     // Los Angeles: PDT then PST.
     expect(window("new_york", "America/Los_Angeles")).toBe("06:00-14:00");
     expect(window("new_york", "America/Los_Angeles", january)).toBe("05:00-13:00");
+  });
+
+  describe("the overlap note converts like the cards", () => {
+    it("renders the overlap on the reader's clock", () => {
+      // UTC+3: 13:00-16:00 UTC is 16:00-19:00 - i.e. 4pm-7pm EAT.
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "Africa/Nairobi"))).toBe(
+        "16:00-19:00",
+      );
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "America/Los_Angeles"))).toBe(
+        "06:00-09:00",
+      );
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "UTC"))).toBe("13:00-16:00");
+    });
+
+    it("marks the overlap crossing local midnight too", () => {
+      // Only a narrow band of offsets splits a 3h window across local midnight:
+      // UTC+9 and UTC+10 do, their neighbours don't.
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "Asia/Tokyo"))).toBe(
+        "22:00-01:00 +1",
+      );
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "Australia/Brisbane"))).toBe(
+        "23:00-02:00 +1",
+      );
+      // UTC+14 lands the whole window on the next local day - shifted, but not split.
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "Pacific/Kiritimati"))).toBe(
+        "03:00-06:00",
+      );
+      // UTC-11 keeps it wholly within the same local day.
+      expect(formatLocalWindow(localSessionWindow(OVERLAP_WINDOW, REF, "Pacific/Niue"))).toBe(
+        "02:00-05:00",
+      );
+    });
+
+    it("stays out of the session list, so it can't become a fourth card", () => {
+      expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asian", "london", "new_york"]);
+      expect(TRADING_SESSIONS).not.toContain(OVERLAP_WINDOW);
+    });
+
+    it("matches the London and New York windows it is derived from", () => {
+      const london = TRADING_SESSIONS.find((s) => s.id === "london")!;
+      const newYork = TRADING_SESSIONS.find((s) => s.id === "new_york")!;
+      // The overlap is exactly where the two windows intersect.
+      expect(OVERLAP_WINDOW.startHour).toBe(newYork.startHour);
+      expect(OVERLAP_WINDOW.endHour).toBe(london.endHour);
+    });
   });
 
   it("labels the zone so local times can't be mistaken for UTC", () => {
