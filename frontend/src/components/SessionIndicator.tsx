@@ -146,7 +146,10 @@ export function SessionIndicator() {
 
       {weekend && reopen && (
         <p className="mt-2 text-xs text-amber-700 dark:text-amber-500">
-          Market closed for the weekend — reopens {formatLocalDayTime(reopen)}.
+          {/* "your time" inline rather than relying on the zone caption below:
+              the reopen weekday can differ from the UTC one, so this line has to
+              stand on its own or it reads like a contradiction. */}
+          Market closed for the weekend — reopens {formatLocalDayTime(reopen)} your time.
         </p>
       )}
 
