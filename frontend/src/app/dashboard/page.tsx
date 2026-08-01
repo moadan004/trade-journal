@@ -10,6 +10,7 @@ import { AppHeader } from "@/components/AppHeader";
 import { CalendarGrid } from "@/components/CalendarGrid";
 import { MonthStatsHeader } from "@/components/MonthStatsHeader";
 import { PeriodSummaryCards } from "@/components/PeriodSummaryCards";
+import { SessionIndicator } from "@/components/SessionIndicator";
 import { TagFilterInput } from "@/components/TagFilterInput";
 import { DayDetailDrawer } from "@/components/DayDetailDrawer";
 import { TradeFormModal } from "@/components/TradeFormModal";
@@ -196,7 +197,11 @@ export default function DashboardPage() {
       />
 
       <main className="mx-auto w-full max-w-5xl flex-1 px-4 py-6 sm:px-6 sm:py-8">
-        <PeriodSummaryCards week={weekSummary} month={monthSummary} />
+        <SessionIndicator />
+
+        <div className="mt-4">
+          <PeriodSummaryCards week={weekSummary} month={monthSummary} />
+        </div>
 
         <div className="mt-4 max-w-sm">
           <TagFilterInput tags={tags} onChange={handleTagsChange} />
