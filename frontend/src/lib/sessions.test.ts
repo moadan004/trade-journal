@@ -2,11 +2,16 @@ import { describe, expect, it } from "vitest";
 
 import {
   formatCountdown,
+  formatLocalDayTime,
+  formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
   isWeekendClosure,
+  localSessionWindow,
+  localZoneLabel,
   msOfUtcDay,
   msUntilMarketOpen,
+  resolvedTimeZone,
   sessionStates,
   TRADING_SESSIONS,
 } from "@/lib/sessions";
@@ -301,6 +306,126 @@ describe("weekend closure", () => {
         expect(isWeekendClosure(new Date(Date.UTC(2026, 6, day, hour)))).toBe(false);
       }
     }
+  });
+});
+
+describe("local-time display", () => {
+  // Values below were computed against Intl before being written down, not
+  // guessed. Reference day is Wed 15 July 2026 unless stated.
+  const REF = new Date("2026-07-15T12:00:00Z");
+
+  const window = (id: string, zone: string, reference = REF) => {
+    const session = TRADING_SESSIONS.find((s) => s.id === id)!;
+    return formatLocalWindow(localSessionWindow(session, reference, zone));
+  };
+
+  it("shifts forward for a zone ahead of UTC (UTC+3)", () => {
+    expect(window("asian", "Africa/Nairobi")).toBe("03:00-11:00");
+    expect(window("london", "Africa/Nairobi")).toBe("11:00-19:00");
+  });
+
+  it("shifts back for a zone behind UTC (UTC-7)", () => {
+    expect(window("london", "America/Los_Angeles")).toBe("01:00-09:00");
+    expect(window("new_york", "America/Los_Angeles")).toBe("06:00-14:00");
+  });
+
+  it("handles a half-hour offset", () => {
+    expect(window("asian", "Asia/Kolkata")).toBe("05:30-13:30");
+    expect(window("london", "Asia/Kolkata")).toBe("13:30-21:30");
+  });
+
+  describe("windows that cross local midnight", () => {
+    it("marks a session running into the next local day, going forwards", () => {
+      // UTC+14: London 08:00-16:00 UTC lands on 22:00-06:00 the next day.
+      expect(window("london", "Pacific/Kiritimati")).toBe("22:00-06:00 +1");
+    });
+
+    it("marks it going backwards too", () => {
+      // UTC-7: Asian 00:00-08:00 UTC starts the previous local evening.
+      expect(window("asian", "America/Los_Angeles")).toBe("17:00-01:00 +1");
+    });
+
+    it("treats an end landing exactly on local midnight as a crossing", () => {
+      // UTC+3: New York closes 21:00 UTC = 00:00 local, i.e. the next day.
+      expect(window("new_york", "Africa/Nairobi")).toBe("16:00-00:00 +1");
+    });
+
+    it("leaves same-day windows unmarked", () => {
+      for (const id of ["asian", "london", "new_york"]) {
+        expect(window(id, "UTC")).not.toContain("+");
+      }
+      expect(window("asian", "Pacific/Kiritimati")).toBe("14:00-22:00");
+    });
+  });
+
+  it("uses the reference date, so a DST-observing zone reads correctly year-round", () => {
+    const january = new Date("2026-01-14T12:00:00Z");
+    // London is UTC+1 in July, UTC+0 in January.
+    expect(window("london", "Europe/London")).toBe("09:00-17:00");
+    expect(window("london", "Europe/London", january)).toBe("08:00-16:00");
+    // Los Angeles: PDT then PST.
+    expect(window("new_york", "America/Los_Angeles")).toBe("06:00-14:00");
+    expect(window("new_york", "America/Los_Angeles", january)).toBe("05:00-13:00");
+  });
+
+  it("labels the zone so local times can't be mistaken for UTC", () => {
+    expect(localZoneLabel(REF, "Africa/Nairobi")).toBe("GMT+3");
+    expect(localZoneLabel(REF, "America/Los_Angeles")).toBe("PDT");
+    expect(localZoneLabel(new Date("2026-01-14T12:00:00Z"), "America/Los_Angeles")).toBe("PST");
+    expect(localZoneLabel(REF, "UTC")).toBe("UTC");
+  });
+
+  it("resolves the browser zone when none is passed, without hardcoding one", () => {
+    expect(resolvedTimeZone("Africa/Nairobi")).toBe("Africa/Nairobi");
+    expect(resolvedTimeZone()).toBe(Intl.DateTimeFormat().resolvedOptions().timeZone);
+  });
+
+  describe("the weekend reopen label", () => {
+    // The market reopens Sun 19 July 2026 at 21:00 UTC.
+    const reopen = new Date("2026-07-19T21:00:00Z");
+
+    it.each([
+      ["Africa/Nairobi", "Monday 00:00"],
+      ["America/Los_Angeles", "Sunday 14:00"],
+      ["Pacific/Kiritimati", "Monday 11:00"],
+      ["Asia/Kolkata", "Monday 02:30"],
+      ["UTC", "Sunday 21:00"],
+    ])("reads correctly in %s", (zone, expected) => {
+      expect(formatLocalDayTime(reopen, zone)).toBe(expected);
+    });
+
+    it("carries the weekday across, so a reopen can land on Monday locally", () => {
+      // Worth stating outright: east of UTC+3 the "Sunday" open is Monday for
+      // the reader, and printing "Sunday" would be simply wrong for them.
+      expect(formatLocalDayTime(reopen, "Africa/Nairobi")).toMatch(/^Monday/);
+      expect(formatLocalDayTime(reopen, "America/Los_Angeles")).toMatch(/^Sunday/);
+    });
+  });
+
+  describe("display never feeds back into the logic", () => {
+    const zones = ["UTC", "Africa/Nairobi", "America/Los_Angeles", "Pacific/Kiritimati"];
+
+    it("keeps open/closed identical whatever zone is rendered", () => {
+      // Sat 14:00 UTC is Sunday 04:00 in Kiritimati and Saturday 07:00 in LA -
+      // the market is shut for all of them, because the rule is not local.
+      const saturday = new Date("2026-07-18T14:00:00Z");
+      for (const zone of zones) {
+        // The window still renders...
+        expect(window("london", zone, saturday)).toMatch(/^\d{2}:\d{2}-\d{2}:\d{2}/);
+        // ...while the verdict stays put.
+        expect(isWeekendClosure(saturday)).toBe(true);
+        expect(activeIds(saturday)).toEqual([]);
+      }
+    });
+
+    it("keeps the mid-week active set identical whatever zone is rendered", () => {
+      const overlapTime = new Date("2026-07-15T14:00:00Z");
+      for (const zone of zones) {
+        expect(window("new_york", zone, overlapTime)).toBeTruthy();
+        expect(activeIds(overlapTime)).toEqual(["london", "new_york"]);
+        expect(isOverlapActive(overlapTime)).toBe(true);
+      }
+    });
   });
 });
 

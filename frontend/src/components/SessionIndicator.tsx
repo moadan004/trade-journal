@@ -4,22 +4,19 @@ import { useSyncExternalStore } from "react";
 
 import {
   formatCountdown,
+  formatLocalDayTime,
+  formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
   isWeekendClosure,
+  localSessionWindow,
+  localZoneLabel,
   marketOpenInstant,
+  resolvedTimeZone,
   sessionStates,
   OVERLAP_END_HOUR,
   OVERLAP_START_HOUR,
 } from "@/lib/sessions";
-
-/** "Sunday 21:00 UTC" - the reopen, spelled out so the countdown has a target. */
-function formatReopen(instant: Date): string {
-  const weekday = instant.toLocaleDateString("en-US", { weekday: "long", timeZone: "UTC" });
-  const hour = String(instant.getUTCHours()).padStart(2, "0");
-  const minute = String(instant.getUTCMinutes()).padStart(2, "0");
-  return `${weekday} ${hour}:${minute} UTC`;
-}
 
 /**
  * How often the widget re-reads the clock. Labels are minute-resolution, so
@@ -87,6 +84,9 @@ export function SessionIndicator() {
   const overlap = isOverlapActive(now);
   const weekend = isWeekendClosure(now);
   const reopen = marketOpenInstant(now);
+  // Resolved once per tick from the browser, never hardcoded.
+  const zoneLabel = localZoneLabel(now);
+  const zoneName = resolvedTimeZone();
 
   return (
     <section aria-label="Trading sessions" data-weekend={weekend}>
@@ -135,7 +135,10 @@ export function SessionIndicator() {
 
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
               {weekendClosed ? "until market opens" : active ? "until close" : "until open"} ·{" "}
-              {formatSessionWindow(session)}
+              {/* Local wall clock; the canonical UTC range is in the tooltip. */}
+              <span title={formatSessionWindow(session)}>
+                {formatLocalWindow(localSessionWindow(session, now))}
+              </span>
             </p>
           </div>
         ))}
@@ -143,7 +146,7 @@ export function SessionIndicator() {
 
       {weekend && reopen && (
         <p className="mt-2 text-xs text-amber-700 dark:text-amber-500">
-          Market closed for the weekend — reopens {formatReopen(reopen)}.
+          Market closed for the weekend — reopens {formatLocalDayTime(reopen)}.
         </p>
       )}
 
@@ -153,6 +156,12 @@ export function SessionIndicator() {
           most active window of the day.
         </p>
       )}
+
+      {/* Without this the local ranges would read as UTC and quietly mislead.
+          "+1" on a range means it runs past your midnight into the next day. */}
+      <p data-testid="session-zone" className="mt-2 text-xs text-zinc-400 dark:text-zinc-500">
+        Session times shown in your local time — {zoneLabel} ({zoneName}).
+      </p>
     </section>
   );
 }

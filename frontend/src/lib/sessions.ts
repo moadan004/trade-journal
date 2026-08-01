@@ -243,8 +243,118 @@ export function formatCountdown(ms: number): string {
   return hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`;
 }
 
-/** e.g. "08:00-16:00 UTC", for the card subtitle. */
+/** e.g. "08:00-16:00 UTC". The canonical form, kept for reference in a tooltip. */
 export function formatSessionWindow(session: TradingSession): string {
   const pad = (hour: number) => String(hour).padStart(2, "0");
   return `${pad(session.startHour)}:00-${pad(session.endHour)}:00 UTC`;
+}
+
+/* ------------------------------------------------------------------------- *
+ * Display layer.
+ *
+ * Everything below converts already-decided instants into the reader's local
+ * wall clock. None of it feeds back into the open/closed comparisons above,
+ * which stay anchored to UTC hours and New York for the weekly boundary - a
+ * session does not open earlier because you flew somewhere.
+ *
+ * `timeZone` is a parameter rather than a constant so tests can pin a zone;
+ * passing undefined lets Intl use the browser's own, which is what ships.
+ * ------------------------------------------------------------------------- */
+
+const timeFormatters = new Map<string, Intl.DateTimeFormat>();
+
+function timeFormatter(timeZone: string | undefined): Intl.DateTimeFormat {
+  const key = timeZone ?? "";
+  let existing = timeFormatters.get(key);
+  if (!existing) {
+    existing = new Intl.DateTimeFormat("en-GB", {
+      timeZone,
+      hour: "2-digit",
+      minute: "2-digit",
+      hourCycle: "h23",
+    });
+    timeFormatters.set(key, existing);
+  }
+  return existing;
+}
+
+/** "19:00" in the reader's zone. */
+export function formatLocalTime(instant: Date, timeZone?: string): string {
+  return timeFormatter(timeZone).format(instant);
+}
+
+/** Days between two instants as the reader's calendar sees them: 0, 1, -1... */
+function localDayDelta(from: Date, to: Date, timeZone: string | undefined): number {
+  const key = (d: Date) => {
+    const parts: Record<string, string> = {};
+    for (const p of new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    }).formatToParts(d)) {
+      parts[p.type] = p.value;
+    }
+    return Date.UTC(Number(parts.year), Number(parts.month) - 1, Number(parts.day));
+  };
+  return Math.round((key(to) - key(from)) / MS_PER_DAY);
+}
+
+export interface LocalWindow {
+  start: string;
+  end: string;
+  /** 1 when the window runs past local midnight, so the end is the next day. */
+  dayShift: number;
+}
+
+/**
+ * A session's UTC window expressed on the reader's clock.
+ *
+ * `reference` supplies the calendar day to convert on, because the offset is
+ * date-dependent - a zone observing DST maps 08:00 UTC to different local hours
+ * in January and July.
+ */
+export function localSessionWindow(
+  session: TradingSession,
+  reference: Date,
+  timeZone?: string,
+): LocalWindow {
+  const midnightUtc = Date.UTC(
+    reference.getUTCFullYear(),
+    reference.getUTCMonth(),
+    reference.getUTCDate(),
+  );
+  const start = new Date(midnightUtc + session.startHour * MS_PER_HOUR);
+  const end = new Date(midnightUtc + session.endHour * MS_PER_HOUR);
+
+  return {
+    start: formatLocalTime(start, timeZone),
+    end: formatLocalTime(end, timeZone),
+    dayShift: localDayDelta(start, end, timeZone),
+  };
+}
+
+/** "11:00-19:00", or "22:00-06:00 +1" when the window crosses local midnight. */
+export function formatLocalWindow(window: LocalWindow): string {
+  const range = `${window.start}-${window.end}`;
+  return window.dayShift > 0 ? `${range} +${window.dayShift}` : range;
+}
+
+/** "Sunday 00:00" in the reader's zone - weekday included since it can shift. */
+export function formatLocalDayTime(instant: Date, timeZone?: string): string {
+  const weekday = new Intl.DateTimeFormat("en-US", { timeZone, weekday: "long" }).format(instant);
+  return `${weekday} ${formatLocalTime(instant, timeZone)}`;
+}
+
+/** The reader's zone as a short label: "GMT+3", "EDT". */
+export function localZoneLabel(reference: Date, timeZone?: string): string {
+  const parts = new Intl.DateTimeFormat("en-US", { timeZone, timeZoneName: "short" }).formatToParts(
+    reference,
+  );
+  return parts.find((p) => p.type === "timeZoneName")?.value ?? "local time";
+}
+
+/** The IANA zone actually in effect, for the "which timezone?" caption. */
+export function resolvedTimeZone(timeZone?: string): string {
+  return timeZone ?? Intl.DateTimeFormat().resolvedOptions().timeZone;
 }
