@@ -48,6 +48,29 @@ export const OVERLAP_WINDOW: TradingSession = {
   endHour: OVERLAP_END_HOUR,
 };
 
+/**
+ * The busiest hour: the first of the overlap.
+ *
+ * Two things stack here. The major US releases print at 08:30 and 10:00 ET,
+ * which is 12:30/13:30 UTC in summer and 13:30/15:00 UTC in winter - so the
+ * 13:00-14:00 UTC hour catches the bulk of them - and the New York cash open
+ * adds its own volatility while London is still fully staffed.
+ *
+ * Named constants rather than inline literals precisely because that ET-to-UTC
+ * mapping shifts with US DST, so this is a window someone may well want to move.
+ * Changing these two numbers is the whole edit; the predicate, the local-time
+ * conversion and the badge all read from them.
+ */
+export const PEAK_HOUR_START_UTC = 13;
+export const PEAK_HOUR_END_UTC = 14;
+
+export const PEAK_WINDOW: TradingSession = {
+  id: "peak",
+  name: "Peak activity",
+  startHour: PEAK_HOUR_START_UTC,
+  endHour: PEAK_HOUR_END_UTC,
+};
+
 const MS_PER_MINUTE = 60_000;
 const MS_PER_HOUR = 60 * MS_PER_MINUTE;
 const MS_PER_DAY = 24 * MS_PER_HOUR;
@@ -230,6 +253,21 @@ export function sessionState(session: TradingSession, now: Date): SessionState {
 
 export function sessionStates(now: Date): SessionState[] {
   return TRADING_SESSIONS.map((session) => sessionState(session, now));
+}
+
+/**
+ * True during the busiest hour, the first of the overlap.
+ *
+ * Layered on the overlap rather than replacing it: this is always a strict
+ * subset, so whenever it is true the overlap note is showing too. The weekend
+ * guard is repeated here rather than inferred - a peak badge on a Saturday would
+ * be exactly the bug the closure rule exists to prevent.
+ */
+export function isPeakActivity(now: Date): boolean {
+  if (isWeekendClosure(now)) return false;
+
+  const elapsed = msOfUtcDay(now);
+  return elapsed >= PEAK_HOUR_START_UTC * MS_PER_HOUR && elapsed < PEAK_HOUR_END_UTC * MS_PER_HOUR;
 }
 
 /** True when London and New York are both open - the 13:00-16:00 UTC window. */

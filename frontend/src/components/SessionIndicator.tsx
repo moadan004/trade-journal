@@ -8,6 +8,7 @@ import {
   formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
+  isPeakActivity,
   isWeekendClosure,
   localSessionWindow,
   localZoneLabel,
@@ -15,6 +16,7 @@ import {
   resolvedTimeZone,
   sessionStates,
   OVERLAP_WINDOW,
+  PEAK_WINDOW,
 } from "@/lib/sessions";
 
 /**
@@ -81,16 +83,28 @@ export function SessionIndicator() {
   const now = new Date(tick);
   const states = sessionStates(now);
   const overlap = isOverlapActive(now);
+  const peak = isPeakActivity(now);
   const weekend = isWeekendClosure(now);
   const reopen = marketOpenInstant(now);
   // Resolved once per tick from the browser, never hardcoded.
   const zoneLabel = localZoneLabel(now);
   const zoneName = resolvedTimeZone();
+  // Built once per tick rather than per card - all three would render the same
+  // string, and it carries the peak window on the reader's clock.
+  const peakTooltip = `Peak activity ${formatLocalWindow(
+    localSessionWindow(PEAK_WINDOW, now),
+  )} — US data releases and the New York open land in this hour.`;
 
   return (
     <section aria-label="Trading sessions" data-weekend={weekend}>
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {states.map(({ session, active, msUntilChange, weekendClosed }) => (
+        {states.map(({ session, active, msUntilChange, weekendClosed }) => {
+          // Derived, not hardcoded to London and New York: during the peak hour
+          // those two are precisely the sessions that are open, so this stays
+          // right on its own if the window boundaries ever move.
+          const showPeak = peak && active;
+
+          return (
           <div
             key={session.id}
             data-testid={`session-${session.id}`}
@@ -109,18 +123,34 @@ export function SessionIndicator() {
               >
                 {session.name}
               </p>
-              <span
-                className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${
-                  active ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-400 dark:text-zinc-500"
-                }`}
-              >
+              <span className="flex items-center gap-1.5">
+                {/* Sits beside the Open/Closed indicator so it reads as another
+                    status on this card, not a note about the row. The full
+                    explanation is on hover and long-press rather than in the
+                    card, which at this width would push the countdown around. */}
+                {showPeak && (
+                  <span
+                    data-testid={`peak-badge-${session.id}`}
+                    title={peakTooltip}
+                    className="inline-flex items-center gap-0.5 rounded-full bg-amber-100 px-1.5 py-0.5 text-[10px] font-semibold text-amber-900 dark:bg-amber-400/15 dark:text-amber-300"
+                  >
+                    <span aria-hidden="true">⚡</span>
+                    Peak
+                  </span>
+                )}
                 <span
-                  aria-hidden="true"
-                  className={`h-1.5 w-1.5 rounded-full ${
-                    active ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
+                  className={`inline-flex items-center gap-1.5 text-[11px] font-medium ${
+                    active ? "text-emerald-700 dark:text-emerald-400" : "text-zinc-400 dark:text-zinc-500"
                   }`}
-                />
-                {active ? "Open" : "Closed"}
+                >
+                  <span
+                    aria-hidden="true"
+                    className={`h-1.5 w-1.5 rounded-full ${
+                      active ? "bg-emerald-500" : "bg-zinc-300 dark:bg-zinc-600"
+                    }`}
+                  />
+                  {active ? "Open" : "Closed"}
+                </span>
               </span>
             </div>
 
@@ -140,7 +170,8 @@ export function SessionIndicator() {
               </span>
             </p>
           </div>
-        ))}
+          );
+        })}
       </div>
 
       {weekend && reopen && (

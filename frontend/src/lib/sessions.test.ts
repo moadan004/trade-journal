@@ -6,10 +6,15 @@ import {
   formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
+  isPeakActivity,
   isWeekendClosure,
   localSessionWindow,
   localZoneLabel,
+  OVERLAP_START_HOUR,
   OVERLAP_WINDOW,
+  PEAK_HOUR_END_UTC,
+  PEAK_HOUR_START_UTC,
+  PEAK_WINDOW,
   msOfUtcDay,
   msUntilMarketOpen,
   resolvedTimeZone,
@@ -121,6 +126,106 @@ describe("London / New York overlap", () => {
 
     expect(isOverlapActive(utc(16, 0, 0))).toBe(false);
     expect(activeIds(utc(16, 0, 0))).toEqual(["new_york"]);
+  });
+});
+
+describe("peak activity hour", () => {
+  it("uses named constants covering the first hour of the overlap", () => {
+    expect(PEAK_HOUR_START_UTC).toBe(13);
+    expect(PEAK_HOUR_END_UTC).toBe(14);
+    expect(PEAK_WINDOW.startHour).toBe(PEAK_HOUR_START_UTC);
+    expect(PEAK_WINDOW.endHour).toBe(PEAK_HOUR_END_UTC);
+    // It must begin exactly where the overlap begins, or "first hour" is a lie.
+    expect(PEAK_HOUR_START_UTC).toBe(OVERLAP_START_HOUR);
+  });
+
+  it("is on through 13:00-14:00 UTC", () => {
+    expect(isPeakActivity(utc(13, 0, 0))).toBe(true);
+    expect(isPeakActivity(utc(13, 30))).toBe(true);
+    expect(isPeakActivity(utc(13, 59, 59))).toBe(true);
+  });
+
+  it("starts exactly at 13:00, not 12:59", () => {
+    expect(isPeakActivity(utc(12, 59, 59))).toBe(false);
+    expect(isPeakActivity(utc(13, 0, 0))).toBe(true);
+  });
+
+  it("ends exactly at 14:00, while the overlap keeps running", () => {
+    expect(isPeakActivity(utc(13, 59, 59))).toBe(true);
+
+    expect(isPeakActivity(utc(14, 0, 0))).toBe(false);
+    // The broader overlap note must still be showing - requirement 2.
+    expect(isOverlapActive(utc(14, 0, 0))).toBe(true);
+    expect(activeIds(utc(14, 0, 0))).toEqual(["london", "new_york"]);
+  });
+
+  it("stays off for the rest of the overlap", () => {
+    for (const hour of [14, 15]) {
+      expect(isPeakActivity(utc(hour))).toBe(false);
+      expect(isOverlapActive(utc(hour))).toBe(true);
+    }
+  });
+
+  it("is never on outside the overlap, at any minute of a weekday", () => {
+    // The invariant that matters: peak implies overlap, always.
+    for (let minute = 0; minute < 24 * 60; minute++) {
+      const now = new Date(Date.UTC(2026, 6, 15, 0, minute));
+      if (isPeakActivity(now)) expect(isOverlapActive(now)).toBe(true);
+    }
+  });
+
+  it("is a strict subset - the overlap runs on after peak ends", () => {
+    const peakMinutes = [];
+    const overlapMinutes = [];
+    for (let minute = 0; minute < 24 * 60; minute++) {
+      const now = new Date(Date.UTC(2026, 6, 15, 0, minute));
+      if (isPeakActivity(now)) peakMinutes.push(minute);
+      if (isOverlapActive(now)) overlapMinutes.push(minute);
+    }
+    expect(peakMinutes.length).toBe(60);
+    expect(overlapMinutes.length).toBe(180);
+    expect(overlapMinutes).toEqual(expect.arrayContaining(peakMinutes));
+  });
+
+  it("stays off all weekend, even at 13:30 UTC", () => {
+    // Saturday and Sunday both pass through the peak hour; the closure wins.
+    for (const day of [18, 19]) {
+      const now = new Date(Date.UTC(2026, 6, day, 13, 30));
+      expect(isWeekendClosure(now)).toBe(true);
+      expect(isPeakActivity(now)).toBe(false);
+      expect(isOverlapActive(now)).toBe(false);
+    }
+  });
+
+  it("converts to the reader's clock like everything else", () => {
+    const ref = new Date("2026-07-15T13:30:00Z");
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "Africa/Nairobi"))).toBe(
+      "16:00-17:00",
+    );
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "America/Los_Angeles"))).toBe(
+      "06:00-07:00",
+    );
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "Asia/Kolkata"))).toBe(
+      "18:30-19:30",
+    );
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "UTC"))).toBe("13:00-14:00");
+  });
+
+  it("marks the peak hour crossing local midnight", () => {
+    const ref = new Date("2026-07-15T13:30:00Z");
+    // UTC+11: 13:00 UTC is 00:00 next day, so start and end share that day...
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "Pacific/Noumea"))).toBe(
+      "00:00-01:00",
+    );
+    // ...whereas UTC+10 splits it, 23:00 to 00:00 the next day.
+    expect(formatLocalWindow(localSessionWindow(PEAK_WINDOW, ref, "Australia/Brisbane"))).toBe(
+      "23:00-00:00 +1",
+    );
+  });
+
+  it("stays out of the session list, like the overlap window", () => {
+    expect(TRADING_SESSIONS).not.toContain(PEAK_WINDOW);
+    expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asian", "london", "new_york"]);
   });
 });
 
