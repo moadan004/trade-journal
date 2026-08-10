@@ -29,12 +29,12 @@ from app.services import risk as risk_service
 # trade predates Phase 6 and must be excluded from R stats.
 #
 #  #   day  hour   pnl   risk   R = pnl/risk   status     session
-#  1   02   02:30  +100    50   +2.0           win        asian
+#  1   02   02:30  +100    50   +2.0           win        asia_pacific
 #  2   02   09:15   -50    50   -1.0           loss       london
 #  3   02   14:00  +200    50   +4.0           win        overlap
 #  4   03   17:00  -150    50   -3.0           loss       new_york
-#  5   03   22:30  -100    50   -2.0           loss       off_hours
-#  6   04   03:00   +25    50   +0.5           win        asian
+#  5   03   22:30  -100    50   -2.0           loss       sydney
+#  6   04   03:00   +25    50   +0.5           win        asia_pacific
 #  7   04   10:00     0    50    0.0           breakeven  london
 #  8   05   14:30   +75    50   +1.5           win        overlap
 #  9   05   18:00  -200  None   (excluded)     loss       new_york
@@ -232,7 +232,7 @@ def test_streaks_match_hand_calculation(seeded):
 # --- session breakdown ----------------------------------------------------
 #
 # Bucketed on entry hour in UTC:
-#   asian     00-08 : t1 (02:30 win +100), t6 (03:00 win +25)
+#   asia_pac  00-06 : t1 (02:30 win +100), t6 (03:00 win +25)
 #                     2 trades, 2 wins, win rate 1.0,  total +125, avg +62.50
 #   london    08-13 : t2 (09:15 loss -50), t7 (10:00 be 0), t10 (11:00 win +60)
 #                     3 trades, 1 win,    win rate 1/3,  total  +10, avg  +3.333
@@ -240,22 +240,23 @@ def test_streaks_match_hand_calculation(seeded):
 #                     3 trades, 3 wins,   win rate 1.0,  total +305, avg +101.667
 #   new_york  16-21 : t4 (17:00 loss -150), t9 (18:00 loss -200), t12 (19:00 win +90)
 #                     3 trades, 1 win,    win rate 1/3,  total -260, avg  -86.667
-#   off_hours 21-22 : none
-#   sydney    22-00 : t5 (22:30 loss -100)
+#   sydney    21-23 : t5 (22:30 loss -100)
 #                     1 trade,  0 wins,   win rate 0.0,  total -100, avg -100.0
-#                     Was filed under off_hours until 22-24 was split out; a
-#                     22:30 entry is Sydney's opening session, not a dead hour.
+#   tokyo 06-07, tokyo_london 07-08, asia_pacific_late 23-00 : none
 #
-# 2 + 3 + 3 + 3 + 0 + 1 = 12 trades; 125 + 10 + 305 - 260 - 100 = +80 total, which
+# 2 + 3 + 3 + 3 + 1 = 12 trades; 125 + 10 + 305 - 260 - 100 = +80 total, which
 # matches the final cumulative equity in the drawdown table above.
 
 EXPECTED_SESSIONS = {
-    "asian": {"trade_count": 2, "win_count": 2, "win_rate": 1.0, "total_pnl": 125.0, "avg_pnl": 62.5},
+    "asia_pacific": {"trade_count": 2, "win_count": 2, "win_rate": 1.0, "total_pnl": 125.0, "avg_pnl": 62.5},
     "london": {"trade_count": 3, "win_count": 1, "win_rate": 1 / 3, "total_pnl": 10.0, "avg_pnl": 10 / 3},
     "overlap": {"trade_count": 3, "win_count": 3, "win_rate": 1.0, "total_pnl": 305.0, "avg_pnl": 305 / 3},
     "new_york": {"trade_count": 3, "win_count": 1, "win_rate": 1 / 3, "total_pnl": -260.0, "avg_pnl": -260 / 3},
-    "off_hours": {"trade_count": 0, "win_count": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0},
     "sydney": {"trade_count": 1, "win_count": 0, "win_rate": 0.0, "total_pnl": -100.0, "avg_pnl": -100.0},
+    # Empty buckets still appear so the UI can render a fixed, gap-free table.
+    "tokyo": {"trade_count": 0, "win_count": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0},
+    "tokyo_london": {"trade_count": 0, "win_count": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0},
+    "asia_pacific_late": {"trade_count": 0, "win_count": 0, "win_rate": 0.0, "total_pnl": 0.0, "avg_pnl": 0.0},
 }
 
 
@@ -283,10 +284,11 @@ def test_sessions_are_returned_in_clock_order_including_empty_ones(seeded):
     # A stable, gap-free ordering is what lets the UI render a fixed table.
     sessions = _sessions(seeded)["sessions"]
     assert [s["key"] for s in sessions] == [
-        "asian", "london", "overlap", "new_york", "off_hours", "sydney",
+        "asia_pacific", "tokyo", "tokyo_london", "london",
+        "overlap", "new_york", "sydney", "asia_pacific_late",
     ]
     assert [(s["start_hour"], s["end_hour"]) for s in sessions] == [
-        (0, 8), (8, 13), (13, 16), (16, 21), (21, 22), (22, 24),
+        (0, 6), (6, 7), (7, 8), (8, 12), (12, 16), (16, 21), (21, 23), (23, 24),
     ]
 
 
@@ -313,7 +315,8 @@ def test_date_filter_narrows_both_endpoints_consistently(seeded):
     assert sessions["trade_count"] == 3
     by_key = {s["key"]: s["trade_count"] for s in sessions["sessions"]}
     assert by_key == {
-        "asian": 0, "london": 1, "overlap": 1, "new_york": 1, "off_hours": 0, "sydney": 0,
+        "asia_pacific": 0, "tokyo": 0, "tokyo_london": 0, "london": 1,
+        "overlap": 1, "new_york": 1, "sydney": 0, "asia_pacific_late": 0,
     }
 
 
@@ -331,7 +334,7 @@ def test_empty_range_returns_zeros_rather_than_erroring(seeded):
 
     sessions = client.get("/stats/sessions", params=params).json()
     assert sessions["trade_count"] == 0
-    assert len(sessions["sessions"]) == 6
+    assert len(sessions["sessions"]) == 8
     assert all(s["win_rate"] == 0.0 and s["avg_pnl"] == 0.0 for s in sessions["sessions"])
 
 
@@ -395,8 +398,10 @@ def test_bucket_boundaries_are_half_open(value, expected):
 
 @pytest.mark.parametrize(
     ("hour", "expected"),
-    [(0, "asian"), (7, "asian"), (8, "london"), (12, "london"), (13, "overlap"), (15, "overlap"),
-     (16, "new_york"), (20, "new_york"), (21, "off_hours"), (22, "sydney"), (23, "sydney")],
+    [(0, "asia_pacific"), (5, "asia_pacific"), (6, "tokyo"), (7, "tokyo_london"),
+     (8, "london"), (11, "london"), (12, "overlap"), (15, "overlap"),
+     (16, "new_york"), (20, "new_york"), (21, "sydney"), (22, "sydney"),
+     (23, "asia_pacific_late")],
 )
 def test_session_boundaries(hour, expected):
     assert risk_service.session_for_hour(hour) == expected
