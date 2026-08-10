@@ -276,6 +276,62 @@ describe("financial precision", () => {
   });
 });
 
+describe("pip convention is display-only", () => {
+  /**
+   * Gold has no universal pip, so `pipSize` is the one figure in the spec that
+   * is a reporting convention rather than a contract fact. This pins down how
+   * far a wrong choice can reach: money and lot sizing go through
+   * tickValue/tickSize, so they must be identical under every convention, and
+   * only the two pip readouts may move.
+   *
+   * If this ever fails, a monetary output has started depending on the pip
+   * convention - which would turn a labelling question into a sizing bug.
+   */
+  const conventions = ["0.01", "0.10", "1.00", "0.001"];
+
+  it("gives identical money, lots and R:R under every gold pip convention", () => {
+    const base = run({
+      instrument: XAUUSD,
+      entryPrice: "3300.00",
+      stopLoss: "3297.00",
+      takeProfit: "3306.00",
+    }).result!;
+
+    for (const pipSize of conventions) {
+      const { result } = run({
+        instrument: { ...XAUUSD, pipSize },
+        entryPrice: "3300.00",
+        stopLoss: "3297.00",
+        takeProfit: "3306.00",
+      });
+      expect(result!.positionSize).toBe(base.positionSize);
+      expect(result!.riskAmount).toBe(base.riskAmount);
+      expect(result!.riskPercent).toBe(base.riskPercent);
+      expect(result!.potentialLoss).toBe(base.potentialLoss);
+      expect(result!.potentialProfit).toBe(base.potentialProfit);
+      expect(result!.riskReward).toBe(base.riskReward);
+      expect(result!.stopDistance).toBe(base.stopDistance);
+    }
+  });
+
+  it("scales only the pip readouts, inversely with the pip size", () => {
+    const at = (pipSize: string) =>
+      run({
+        instrument: { ...XAUUSD, pipSize },
+        entryPrice: "3300.00",
+        stopLoss: "3297.00",
+        takeProfit: "3306.00",
+      }).result!;
+
+    // The same 3.00 stop, described four ways.
+    expect(formatDecimal(at("0.001").pipsRisked, 1)).toBe("3000.0");
+    expect(formatDecimal(at("0.01").pipsRisked, 1)).toBe("300.0");
+    expect(formatDecimal(at("0.10").pipsRisked, 1)).toBe("30.0");
+    expect(formatDecimal(at("1.00").pipsRisked, 1)).toBe("3.0");
+    expect(formatDecimal(at("0.10").pipsTargeted!, 1)).toBe("60.0");
+  });
+});
+
 describe("validation", () => {
   it("rejects a stop on the wrong side of entry, per direction", () => {
     expect(run({ direction: "long", stopLoss: "1.10250" }).errors[0].message).toMatch(
