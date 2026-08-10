@@ -5,16 +5,20 @@ import { useSyncExternalStore } from "react";
 import {
   formatCountdown,
   formatLocalDayTime,
+  formatLocalTime,
   formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
   isPeakActivity,
+  isTokyoActive,
   isWeekendClosure,
   localSessionWindow,
   localZoneLabel,
   marketOpenInstant,
   resolvedTimeZone,
   sessionStates,
+  TOKYO_OPEN_UTC_HOUR,
+  ASIA_PACIFIC,
   OVERLAP_WINDOW,
   PEAK_WINDOW,
 } from "@/lib/sessions";
@@ -69,7 +73,7 @@ export function SessionIndicator() {
   if (tick === 0) {
     return (
       <section aria-label="Trading sessions" className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-        {["Asian", "London", "New York"].map((name) => (
+        {["Asia-Pacific", "London", "New York"].map((name) => (
           <Card key={name}>
             <p className="text-xs uppercase tracking-wide text-zinc-400 dark:text-zinc-500">{name}</p>
             <p className="mt-1 text-2xl font-semibold text-zinc-300 dark:text-zinc-700">--</p>
@@ -84,6 +88,7 @@ export function SessionIndicator() {
   const states = sessionStates(now);
   const overlap = isOverlapActive(now);
   const peak = isPeakActivity(now);
+  const tokyo = isTokyoActive(now);
   const weekend = isWeekendClosure(now);
   const reopen = marketOpenInstant(now);
   // Resolved once per tick from the browser, never hardcoded.
@@ -103,6 +108,20 @@ export function SessionIndicator() {
           // those two are precisely the sessions that are open, so this stays
           // right on its own if the window boundaries ever move.
           const showPeak = peak && active;
+          // One block, not two cards - but Tokyo joining part-way through it is
+          // a real transition, so the card says which centres are actually on.
+          const centres =
+            session.id === ASIA_PACIFIC.id && active
+              ? tokyo
+                ? "Sydney + Tokyo"
+                : "Sydney only — Tokyo joins at " +
+                  formatLocalTime(
+                    new Date(
+                      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) +
+                        TOKYO_OPEN_UTC_HOUR * 3_600_000,
+                    ),
+                  )
+              : null;
 
           return (
           <div
@@ -161,6 +180,15 @@ export function SessionIndicator() {
             >
               {formatCountdown(msUntilChange)}
             </p>
+
+            {centres && (
+              <p
+                data-testid="asia-pacific-centres"
+                className="mt-0.5 text-[11px] text-emerald-700/90 dark:text-emerald-400/90"
+              >
+                {centres}
+              </p>
+            )}
 
             <p className="mt-1 text-xs text-zinc-500 dark:text-zinc-400">
               {weekendClosed ? "until market opens" : active ? "until close" : "until open"} ·{" "}
