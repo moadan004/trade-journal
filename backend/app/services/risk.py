@@ -31,22 +31,25 @@ R_BUCKETS: list[tuple[str, float | None, float | None]] = [
 # UTC hour ranges, half-open [start, end). Chosen to match how XAUUSD actually
 # trades rather than exchange hours: the 13-16 overlap is broken out because it
 # behaves differently from either London or NY alone.
-# The 22-24 hour used to sit inside "off_hours", which quietly filed Sydney's
-# opening session as no-session-at-all. Split so the widget and these buckets
-# agree about when the Asia-Pacific block is running.
+# The exact partition induced by the four published session windows in
+# frontend/src/lib/sessions.ts - Sydney 21-06, Tokyo 23-08, London 07-16,
+# New York 12-21 UTC. See that file's header for why those particular hours were
+# chosen over exact market-standard ones; the buckets here only have to agree
+# with them, not re-litigate them.
 #
-# NOTE the seasonal approximation: Sydney's 09:00 is 22:00 UTC under AEDT but
-# 23:00 UTC under AEST, and a fixed integer bucket cannot follow that. This uses
-# the earlier of the two, so during southern winter the 22-23 hour is attributed
-# to Sydney about an hour before Sydney actually opens. The widget resolves the
-# real boundary through the IANA zone; only these buckets round it.
+# Every boundary the widget draws is a boundary here, which is what keeps the two
+# from disagreeing about which session a trade belongs to. Midnight is the one
+# extra cut: a bucket cannot wrap a day, so the Sydney+Tokyo stretch either side
+# of 00:00 has to be filed as two entries rather than one.
 SESSIONS: list[tuple[str, str, int, int]] = [
-    ("asian", "Asian", 0, 8),
-    ("london", "London", 8, 13),
-    ("overlap", "London/NY overlap", 13, 16),
+    ("asia_pacific", "Asia-Pacific (Sydney+Tokyo)", 0, 6),
+    ("tokyo", "Tokyo", 6, 7),
+    ("tokyo_london", "Tokyo/London overlap", 7, 8),
+    ("london", "London", 8, 12),
+    ("overlap", "London/NY overlap", 12, 16),
     ("new_york", "New York", 16, 21),
-    ("off_hours", "Off-hours", 21, 22),
-    ("sydney", "Sydney", 22, 24),
+    ("sydney", "Sydney", 21, 23),
+    ("asia_pacific_late", "Asia-Pacific (pre-midnight)", 23, 24),
 ]
 
 

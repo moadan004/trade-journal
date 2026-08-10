@@ -5,11 +5,11 @@ import { useSyncExternalStore } from "react";
 import {
   formatCountdown,
   formatLocalDayTime,
-  formatLocalTime,
   formatLocalWindow,
   formatSessionWindow,
   isOverlapActive,
   isPeakActivity,
+  isSydneyActive,
   isTokyoActive,
   isWeekendClosure,
   localSessionWindow,
@@ -17,7 +17,6 @@ import {
   marketOpenInstant,
   resolvedTimeZone,
   sessionStates,
-  TOKYO_OPEN_UTC_HOUR,
   ASIA_PACIFIC,
   OVERLAP_WINDOW,
   PEAK_WINDOW,
@@ -88,6 +87,7 @@ export function SessionIndicator() {
   const states = sessionStates(now);
   const overlap = isOverlapActive(now);
   const peak = isPeakActivity(now);
+  const sydney = isSydneyActive(now);
   const tokyo = isTokyoActive(now);
   const weekend = isWeekendClosure(now);
   const reopen = marketOpenInstant(now);
@@ -108,19 +108,13 @@ export function SessionIndicator() {
           // those two are precisely the sessions that are open, so this stays
           // right on its own if the window boundaries ever move.
           const showPeak = peak && active;
-          // One block, not two cards - but Tokyo joining part-way through it is
-          // a real transition, so the card says which centres are actually on.
+          // One block, not two cards - but the block has three phases (Sydney
+          // alone, both, then Tokyo alone after Sydney shuts), and which desks
+          // are actually on is the useful part. Derived from the two windows
+          // rather than spelled out, so it follows if the hours change.
           const centres =
             session.id === ASIA_PACIFIC.id && active
-              ? tokyo
-                ? "Sydney + Tokyo"
-                : "Sydney only — Tokyo joins at " +
-                  formatLocalTime(
-                    new Date(
-                      Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()) +
-                        TOKYO_OPEN_UTC_HOUR * 3_600_000,
-                    ),
-                  )
+              ? [sydney && "Sydney", tokyo && "Tokyo"].filter(Boolean).join(" + ") || null
               : null;
 
           return (

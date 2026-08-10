@@ -1,14 +1,12 @@
 /**
  * FX trading session windows, in UTC.
  *
- * These are the *real* session windows, so London and New York deliberately
- * overlap between 13:00 and 16:00 UTC - the most active window of the day, when
- * both desks are on. That makes them different in shape from the buckets in the
- * backend's `app/services/risk.py`, which partition the day so a trade lands in
- * exactly one bucket ("London" 08-13, "London/NY overlap" 13-16, "New York"
- * 16-21). Both are derived from the same boundary set {0, 8, 13, 16, 21}: the
- * backend's buckets are the partition these overlapping windows induce, so the
- * two never disagree about when a session is on.
+ * The windows overlap on purpose: London and New York are both open 12:00-16:00
+ * UTC, and the Asia-Pacific block runs into London's open. The buckets in the
+ * backend's `app/services/risk.py` are the partition these windows induce, so a
+ * trade lands in exactly one of them. The backend cuts at {0, 6, 7, 8, 12, 16,
+ * 21}; the widget's own boundaries are a subset of that, the extra cuts being
+ * midnight (a bucket cannot wrap a day) and Sydney's close.
  *
  * Everything here is pure and derived from a caller-supplied `Date`, which is
  * what makes boundary behaviour testable without waiting for real clock time.
@@ -23,80 +21,85 @@ export interface TradingSession {
   endHour: number;
 }
 
+/*
+ * ---------------------------------------------------------------------------
+ * SOURCE OF THESE HOURS - read before "correcting" them.
+ *
+ * These four windows are the commonly-published forex session schedule, the one
+ * quoted across broker sites and trading blogs. They were chosen deliberately
+ * over exact market-standard hours, and they are NOT all technically accurate:
+ *
+ *   Tokyo is listed here as 23:00-08:00 UTC. Tokyo's real cash session is
+ *   09:00-18:00 JST = 00:00-09:00 UTC, fixed year-round, because Japan observes
+ *   no DST at all. The 23:00-08:00 figure is in fact Sydney's AEST window, which
+ *   a lot of published tables mislabel as Tokyo.
+ *
+ *   Sydney at 21:00-06:00 UTC and the London/New York pair likewise correspond
+ *   to the northern-summer (BST/EDT) table rather than standard time.
+ *
+ * The trade-off that was made: all four are quoted from the SAME published
+ * table, so they stay consistent with each other. An earlier version mixed a
+ * summer-table Asia-Pacific with standard-time London and New York, which put
+ * the Asian block an hour out relative to the others - worse than either table
+ * used consistently.
+ *
+ * Consequently there is no DST tracking anywhere in these windows: they are
+ * fixed UTC hours. Only the weekly market close (further down) resolves through
+ * a real IANA zone, because that one is a hard market-wide fact rather than a
+ * published approximation.
+ * ---------------------------------------------------------------------------
+ */
+
+/** Sydney, per the published table. Runs through midnight UTC. */
+export const SYDNEY_WINDOW: TradingSession = {
+  id: "sydney",
+  name: "Sydney",
+  startHour: 21,
+  endHour: 6,
+};
+
+/** Tokyo, per the published table - see the caveat above. Runs through midnight. */
+export const TOKYO_WINDOW: TradingSession = {
+  id: "tokyo",
+  name: "Tokyo",
+  startHour: 23,
+  endHour: 8,
+};
+
 export const TRADING_SESSIONS: TradingSession[] = [
-  // Nominal start; the real one is DST-resolved - see asiaPacificWindow.
-  { id: "asia_pacific", name: "Asia-Pacific", startHour: 22, endHour: 8 },
-  { id: "london", name: "London", startHour: 8, endHour: 16 },
-  { id: "new_york", name: "New York", startHour: 13, endHour: 21 },
+  // Sydney and Tokyo shown as one block: their union, 21:00-08:00 UTC.
+  { id: "asia_pacific", name: "Asia-Pacific", startHour: 21, endHour: 8 },
+  { id: "london", name: "London", startHour: 7, endHour: 16 },
+  { id: "new_york", name: "New York", startHour: 12, endHour: 21 },
 ];
 
-/** True for a window that runs through 00:00 UTC, e.g. Asia-Pacific 22:00-08:00. */
+export const ASIA_PACIFIC = TRADING_SESSIONS[0];
+
+/** True for a window that runs through 00:00 UTC, e.g. Asia-Pacific 21:00-08:00. */
 export function wrapsMidnight(session: TradingSession): boolean {
   return session.endHour <= session.startHour;
 }
 
-/**
- * Sydney and Tokyo, tracked as one block.
- *
- * Every window in this file is the centre's 09:00-18:00 local cash session under
- * standard time, which is what puts London at 08:00-16:00 and New York at
- * 13:00-21:00 UTC. Sydney and Tokyo are quoted the same way:
- *
- *   Tokyo   09:00-18:00 JST  = 00:00-09:00 UTC, fixed - Japan has no DST at all.
- *   Sydney  09:00-18:00 AEDT = 22:00-07:00 UTC  (southern summer)
- *           09:00-18:00 AEST = 23:00-08:00 UTC  (southern winter)
- *
- * So the block opens with Sydney at 22:00 or 23:00 UTC depending on the season -
- * resolved through the IANA zone rather than pinned, exactly as the weekly close
- * is. It closes at 08:00 UTC, London's open, which clips the last hour of Tokyo
- * for the same reason the old single "Asian" card did: the windows have to hand
- * over cleanly at a shared boundary.
- *
- * This is the first window here that runs through midnight UTC, which is why
- * wrapsMidnight exists.
- */
-export const ASIA_PACIFIC = TRADING_SESSIONS[0];
-export const SYDNEY_TIME_ZONE = "Australia/Sydney";
-export const TOKYO_TIME_ZONE = "Asia/Tokyo";
-/** Every centre's cash session, in its own local time. */
-export const CENTRE_OPEN_HOUR = 9;
-export const CENTRE_CLOSE_HOUR = 18;
-/** Tokyo joins here. Fixed: 09:00 JST is 00:00 UTC year-round. */
-export const TOKYO_OPEN_UTC_HOUR = 0;
-
-/** The UTC hour of Sydney's 09:00 on the date of `now`: 22 under AEDT, 23 under AEST. */
-export function sydneyOpenUtcHour(now: Date): number {
-  // Offset in whole hours between UTC and Sydney at this instant.
-  const c = zonedClock(now, SYDNEY_TIME_ZONE);
-  const offsetHours = Math.round(
-    (Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute) -
-      Date.UTC(
-        now.getUTCFullYear(),
-        now.getUTCMonth(),
-        now.getUTCDate(),
-        now.getUTCHours(),
-        now.getUTCMinutes(),
-      )) /
-      MS_PER_HOUR,
-  );
-  return (CENTRE_OPEN_HOUR - offsetHours + 24) % 24;
+/** Half-open [start, end) against the UTC clock, inverted for a wrapping window. */
+function isWithin(session: TradingSession, now: Date): boolean {
+  const elapsed = msOfUtcDay(now);
+  const start = session.startHour * MS_PER_HOUR;
+  const end = session.endHour * MS_PER_HOUR;
+  return wrapsMidnight(session) ? elapsed >= start || elapsed < end : elapsed >= start && elapsed < end;
 }
 
-/** The block's window in UTC hours for the date of `now`, start DST-resolved. */
-export function asiaPacificWindow(now: Date): TradingSession {
-  return { ...ASIA_PACIFIC, startHour: sydneyOpenUtcHour(now) };
+/** Sydney's own leg of the block. Weekend-guarded like everything else. */
+export function isSydneyActive(now: Date): boolean {
+  return !isWeekendClosure(now) && isWithin(SYDNEY_WINDOW, now);
 }
 
-/** True once Tokyo has joined - the meaningful transition inside the block. */
+/** Tokyo's own leg. The block runs Sydney-only, then both, then Tokyo-only. */
 export function isTokyoActive(now: Date): boolean {
-  if (isWeekendClosure(now)) return false;
-
-  const { hour } = zonedClock(now, TOKYO_TIME_ZONE);
-  return hour >= CENTRE_OPEN_HOUR && hour < CENTRE_CLOSE_HOUR && msOfUtcDay(now) < 8 * MS_PER_HOUR;
+  return !isWeekendClosure(now) && isWithin(TOKYO_WINDOW, now);
 }
 
 /** UTC hours during which London and New York are both open. */
-export const OVERLAP_START_HOUR = 13;
+export const OVERLAP_START_HOUR = 12;
 export const OVERLAP_END_HOUR = 16;
 
 /**
@@ -118,17 +121,15 @@ export const OVERLAP_WINDOW: TradingSession = {
  * The busiest hour: the first of the overlap.
  *
  * Two things stack here. The major US releases print at 08:30 and 10:00 ET,
- * which is 12:30/13:30 UTC in summer and 13:30/15:00 UTC in winter - so the
- * 13:00-14:00 UTC hour catches the bulk of them - and the New York cash open
+ * which is 12:30/13:30 UTC on the summer table these windows come from, so the
+ * 12:00-13:00 UTC hour catches the bulk of them - and the New York cash open
  * adds its own volatility while London is still fully staffed.
  *
- * Named constants rather than inline literals precisely because that ET-to-UTC
- * mapping shifts with US DST, so this is a window someone may well want to move.
- * Changing these two numbers is the whole edit; the predicate, the local-time
- * conversion and the badge all read from them.
+ * Named constants rather than inline literals: this tracks OVERLAP_START_HOUR,
+ * so moving New York's open moves the peak with it.
  */
-export const PEAK_HOUR_START_UTC = 13;
-export const PEAK_HOUR_END_UTC = 14;
+export const PEAK_HOUR_START_UTC = OVERLAP_START_HOUR;
+export const PEAK_HOUR_END_UTC = OVERLAP_START_HOUR + 1;
 
 export const PEAK_WINDOW: TradingSession = {
   id: "peak",
@@ -311,9 +312,7 @@ export function sessionState(session: TradingSession, now: Date): SessionState {
     return { session, active: false, msUntilChange: msUntilMarketOpen(now), weekendClosed: true };
   }
 
-  // Asia-Pacific opens when Sydney does, which moves with Australian DST.
-  const resolved = session.id === ASIA_PACIFIC.id ? asiaPacificWindow(now) : session;
-
+  const resolved = session;
   const elapsed = msOfUtcDay(now);
   const start = resolved.startHour * MS_PER_HOUR;
   const end = resolved.endHour * MS_PER_HOUR;
@@ -464,7 +463,7 @@ export function localSessionWindow(
     reference.getUTCMonth(),
     reference.getUTCDate(),
   );
-  const resolved = session.id === ASIA_PACIFIC.id ? asiaPacificWindow(reference) : session;
+  const resolved = session;
   const start = new Date(midnightUtc + resolved.startHour * MS_PER_HOUR);
   // A window through midnight ends on the following UTC day, so the end instant
   // has to be pushed a day forward before it is converted for display.
