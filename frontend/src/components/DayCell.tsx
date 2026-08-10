@@ -57,7 +57,7 @@ export function DayCell({ day, stat, onClick }: DayCellProps) {
    * of the app uses - see lib/theme.ts - not a palette private to the calendar.
    */
   const colorClasses = !hasTrades
-    ? "bg-zinc-50 border-zinc-200 text-zinc-400 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-400"
+    ? "bg-zinc-50 border-zinc-200 text-zinc-500 dark:bg-zinc-900 dark:border-zinc-800 dark:text-zinc-400"
     : pnl > 0
       ? "bg-emerald-50 border-emerald-200 text-emerald-900 dark:bg-emerald-950 dark:border-emerald-900 dark:text-emerald-400"
       : pnl < 0
@@ -82,10 +82,11 @@ export function DayCell({ day, stat, onClick }: DayCellProps) {
     >
       <div className="flex items-start justify-between leading-none">
         {/* Demoted to a corner marker so the P&L reads as the cell's headline.
-            The dark bump is legibility, not emphasis: at 60% the day number came
-            in under 4.5:1 on the new solid grounds. Light mode is left exactly as
-            it was. Hierarchy still comes from size and weight, not dimming. */}
-        <span className="text-[10px] font-medium opacity-60 dark:opacity-90">{day}</span>
+            No opacity on it at all: dimming was what pushed it under 4.5:1, and
+            on the near-white empty cell even 90% of zinc-500 only reached 3.8:1.
+            Hierarchy comes from size and weight instead - 10px regular against
+            14px semibold - which costs nothing in legibility. */}
+        <span className="text-[10px] font-medium">{day}</span>
         {hasTrades && <span className="h-1 w-1 rounded-full bg-current opacity-60 sm:h-1.5 sm:w-1.5" />}
       </div>
 
@@ -96,7 +97,7 @@ export function DayCell({ day, stat, onClick }: DayCellProps) {
           </p>
           {/* Trade count and win rate on one line rather than two: same numbers,
               half the vertical space. Full wording is in the button's title. */}
-          <p className="hidden truncate text-[10px] leading-tight opacity-70 sm:block dark:opacity-90">
+          <p className="hidden truncate text-[10px] leading-tight opacity-90 sm:block">
             {stat.trade_count} · {(stat.win_rate * 100).toFixed(0)}%
           </p>
         </div>
