@@ -7,8 +7,16 @@ import type { ReactNode } from "react";
 import { logout } from "@/lib/api";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
+/** Tabs in nav order. A list rather than four near-identical <Link> blocks. */
+const NAV_ITEMS = [
+  { key: "dashboard", href: "/dashboard", label: "Calendar" },
+  { key: "analytics", href: "/analytics", label: "Analytics" },
+  { key: "calculator", href: "/calculator", label: "Calculator" },
+  { key: "reviews", href: "/reviews", label: "Reviews" },
+] as const;
+
 interface AppHeaderProps {
-  active: "dashboard" | "analytics" | "reviews";
+  active: (typeof NAV_ITEMS)[number]["key"];
   right?: ReactNode;
 }
 
@@ -28,36 +36,20 @@ export function AppHeader({ active, right }: AppHeaderProps) {
       <div className="flex items-center gap-6">
         <h1 className="text-lg font-semibold text-zinc-900 dark:text-zinc-100">Trade Journal</h1>
         <nav className="flex gap-4 text-sm font-medium">
-          <Link
-            href="/dashboard"
-            className={
-              active === "dashboard"
-                ? "text-zinc-900 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }
-          >
-            Calendar
-          </Link>
-          <Link
-            href="/analytics"
-            className={
-              active === "analytics"
-                ? "text-zinc-900 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }
-          >
-            Analytics
-          </Link>
-          <Link
-            href="/reviews"
-            className={
-              active === "reviews"
-                ? "text-zinc-900 dark:text-zinc-100"
-                : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
-            }
-          >
-            Reviews
-          </Link>
+          {NAV_ITEMS.map((item) => (
+            <Link
+              key={item.key}
+              href={item.href}
+              aria-current={active === item.key ? "page" : undefined}
+              className={
+                active === item.key
+                  ? "text-zinc-900 dark:text-zinc-100"
+                  : "text-zinc-500 hover:text-zinc-900 dark:text-zinc-400 dark:hover:text-zinc-100"
+              }
+            >
+              {item.label}
+            </Link>
+          ))}
         </nav>
       </div>
       <div className="flex items-center gap-3 sm:gap-4">

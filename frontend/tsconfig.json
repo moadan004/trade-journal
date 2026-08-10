@@ -1,6 +1,10 @@
 {
   "compilerOptions": {
-    "target": "ES2017",
+    // ES2020 for BigInt literals (10n), which lib/decimal.ts uses for exact
+    // money arithmetic. BigInt has been baseline in every browser Next 16
+    // supports since 2020, so this widens the syntax available without
+    // narrowing the audience.
+    "target": "ES2020",
     "lib": ["dom", "dom.iterable", "esnext"],
     "allowJs": true,
     "skipLibCheck": true,
