@@ -10,6 +10,10 @@ import {
   isWeekendClosure,
   localSessionWindow,
   localZoneLabel,
+  ASIA_PACIFIC,
+  isTokyoActive,
+  sydneyOpenUtcHour,
+  wrapsMidnight,
   OVERLAP_START_HOUR,
   OVERLAP_WINDOW,
   PEAK_HOUR_END_UTC,
@@ -47,20 +51,26 @@ function stateOf(now: Date, id: string) {
 }
 
 describe("session windows", () => {
-  it("uses the boundary set the backend buckets are derived from", () => {
-    // app/services/risk.py partitions the day at 0 / 8 / 13 / 16 / 21. The
-    // overlapping windows here must induce exactly those boundaries, or the
-    // widget and the session stats would disagree about when London is on.
+  it("induces boundaries the backend partition refines", () => {
+    // app/services/risk.py partitions the day at 0 / 8 / 13 / 16 / 21 / 22.
+    // Equality no longer holds now that Asia-Pacific runs through midnight: 00:00
+    // is interior to that window, but the backend still has to cut there because
+    // a bucket cannot wrap a day. So the invariant is containment - every edge
+    // the widget draws is an edge the stats also draw - which is what stops the
+    // two disagreeing about when a session is on.
+    const BACKEND_BOUNDARIES = [0, 8, 13, 16, 21, 22];
+
     const boundaries = new Set<number>();
     for (const s of TRADING_SESSIONS) {
       boundaries.add(s.startHour);
       boundaries.add(s.endHour);
     }
-    expect([...boundaries].sort((a, b) => a - b)).toEqual([0, 8, 13, 16, 21]);
+    expect([...boundaries].sort((a, b) => a - b)).toEqual([8, 13, 16, 21, 22]);
+    for (const b of boundaries) expect(BACKEND_BOUNDARIES).toContain(b);
   });
 
   it("formats its window for display", () => {
-    expect(formatSessionWindow(TRADING_SESSIONS[0])).toBe("00:00-08:00 UTC");
+    expect(formatSessionWindow(TRADING_SESSIONS[0])).toBe("22:00-08:00 UTC");
     expect(formatSessionWindow(TRADING_SESSIONS[1])).toBe("08:00-16:00 UTC");
     expect(formatSessionWindow(TRADING_SESSIONS[2])).toBe("13:00-21:00 UTC");
   });
@@ -77,9 +87,9 @@ describe("msOfUtcDay", () => {
 describe("who is open, hour by hour", () => {
   // Hand-derived from Asian 00-08, London 08-16, New York 13-21.
   const expected: Array<[number, string[]]> = [
-    [0, ["asian"]],
-    [4, ["asian"]],
-    [7, ["asian"]],
+    [0, ["asia_pacific"]],
+    [4, ["asia_pacific"]],
+    [7, ["asia_pacific"]],
     [8, ["london"]],
     [12, ["london"]],
     [13, ["london", "new_york"]],
@@ -89,16 +99,118 @@ describe("who is open, hour by hour", () => {
     [20, ["new_york"]],
     [21, []],
     [22, []],
-    [23, []],
+    // Mid-July is southern winter, so Sydney is on AEST and opens at 23:00 UTC.
+    [23, ["asia_pacific"]],
   ];
 
   it.each(expected)("at %i:00 UTC exactly %j are open", (hour, ids) => {
     expect(activeIds(utc(hour))).toEqual(ids);
   });
 
-  it("leaves 21:00-24:00 UTC with no session open", () => {
-    for (let hour = 21; hour < 24; hour++) {
+  it("leaves only the gap before Sydney with no session open", () => {
+    // AEST: New York shuts at 21:00, Sydney opens at 23:00.
+    for (let hour = 21; hour < 23; hour++) {
       expect(activeIds(utc(hour))).toEqual([]);
+    }
+    expect(activeIds(utc(23))).toEqual(["asia_pacific"]);
+  });
+});
+
+describe("Asia-Pacific: the window that runs through midnight UTC", () => {
+  // Verified against Intl before being written down: Sydney's 09:00 is 22:00 UTC
+  // under AEDT and 23:00 UTC under AEST; Tokyo's is 00:00 UTC all year, Japan
+  // having no DST. Southern DST flips on 2026-04-04 and 2026-10-03.
+  const jul = (h: number, m = 0) => new Date(Date.UTC(2026, 6, 15, h, m)); // AEST, Wed
+  const jan = (h: number, m = 0) => new Date(Date.UTC(2026, 0, 14, h, m)); // AEDT, Wed
+
+  it("resolves Sydney's open through the zone rather than pinning it", () => {
+    expect(sydneyOpenUtcHour(jul(12))).toBe(23); // AEST, UTC+10
+    expect(sydneyOpenUtcHour(jan(12))).toBe(22); // AEDT, UTC+11
+  });
+
+  it("flips on the exact changeover dates", () => {
+    // Australian DST turns over on the first Sunday of April and October.
+    expect(sydneyOpenUtcHour(new Date("2026-04-04T12:00:00Z"))).toBe(22); // Sat, AEDT
+    expect(sydneyOpenUtcHour(new Date("2026-04-05T12:00:00Z"))).toBe(23); // Sun, AEST
+    expect(sydneyOpenUtcHour(new Date("2026-10-03T12:00:00Z"))).toBe(23); // Sat, AEST
+    expect(sydneyOpenUtcHour(new Date("2026-10-04T12:00:00Z"))).toBe(22); // Sun, AEDT
+  });
+
+  it("changes over while the market is shut, so no trading hour is affected", () => {
+    // Both flips land on a Sunday, inside the weekend closure - which is why the
+    // block never shifts underneath anyone mid-session. Worth pinning: if the
+    // rule ever moved to a weekday, the open would jump an hour live.
+    for (const iso of ["2026-04-05T12:00:00Z", "2026-10-04T12:00:00Z"]) {
+      expect(isWeekendClosure(new Date(iso))).toBe(true);
+      expect(activeIds(new Date(iso))).toEqual([]);
+    }
+    // First trading day either side carries the settled offset.
+    expect(sydneyOpenUtcHour(new Date("2026-04-02T12:00:00Z"))).toBe(22); // Thu before
+    expect(sydneyOpenUtcHour(new Date("2026-04-06T12:00:00Z"))).toBe(23); // Mon after
+    expect(sydneyOpenUtcHour(new Date("2026-10-01T12:00:00Z"))).toBe(23); // Thu before
+    expect(sydneyOpenUtcHour(new Date("2026-10-05T12:00:00Z"))).toBe(22); // Mon after
+  });
+
+  it("is declared as a wrapping window", () => {
+    expect(wrapsMidnight(ASIA_PACIFIC)).toBe(true);
+    expect(wrapsMidnight(TRADING_SESSIONS[1])).toBe(false); // London
+    expect(wrapsMidnight(TRADING_SESSIONS[2])).toBe(false); // New York
+  });
+
+  it("opens an hour earlier under AEDT than AEST", () => {
+    expect(activeIds(jul(22, 30))).toEqual([]); // AEST: not yet
+    expect(activeIds(jan(22, 30))).toEqual(["asia_pacific"]); // AEDT: already on
+    expect(activeIds(jul(23, 30))).toEqual(["asia_pacific"]);
+  });
+
+  it("stays on continuously across 00:00 UTC", () => {
+    // Minute by minute from 23:30 to 00:30 - no blink at the date rollover.
+    for (let m = 0; m <= 60; m++) {
+      const now = new Date(Date.UTC(2026, 6, 15, 23, 30) + m * MINUTE);
+      expect(activeIds(now)).toEqual(["asia_pacific"]);
+    }
+  });
+
+  it("counts down across midnight without going negative or resetting", () => {
+    // 23:30 AEST -> closes 08:00 the next day = 8h30m.
+    expect(stateOf(jul(23, 30), "asia_pacific").msUntilChange).toBe(8 * HOUR + 30 * MINUTE);
+    // one minute later, one minute less
+    expect(stateOf(jul(23, 31), "asia_pacific").msUntilChange).toBe(8 * HOUR + 29 * MINUTE);
+    // just after midnight it is still counting to the same 08:00
+    expect(stateOf(jul(0, 30), "asia_pacific").msUntilChange).toBe(7 * HOUR + 30 * MINUTE);
+    expect(stateOf(jul(0, 0), "asia_pacific").msUntilChange).toBe(8 * HOUR);
+  });
+
+  it("never reports a non-positive countdown at any minute of the day", () => {
+    for (const day of [jul, jan]) {
+      for (let minute = 0; minute < 24 * 60; minute++) {
+        const now = day(0, minute);
+        for (const st of sessionStates(now)) expect(st.msUntilChange).toBeGreaterThan(0);
+      }
+    }
+  });
+
+  it("closes at London's open, clipping Tokyo's last hour", () => {
+    expect(activeIds(jul(7, 59))).toEqual(["asia_pacific"]);
+    expect(activeIds(jul(8, 0))).toEqual(["london"]);
+  });
+
+  it("marks Tokyo joining at 00:00 UTC, fixed year-round", () => {
+    expect(isTokyoActive(jul(23, 30))).toBe(false); // Sydney only
+    expect(isTokyoActive(jul(0, 0))).toBe(true);
+    expect(isTokyoActive(jul(7, 59))).toBe(true);
+    expect(isTokyoActive(jul(8, 0))).toBe(false); // block has closed
+    // Japan has no DST, so January behaves identically.
+    expect(isTokyoActive(jan(23, 30))).toBe(false);
+    expect(isTokyoActive(jan(0, 0))).toBe(true);
+  });
+
+  it("obeys the weekend closure like every other window", () => {
+    for (const hour of [23, 2, 6]) {
+      const sat = new Date(Date.UTC(2026, 6, 18, hour));
+      expect(isWeekendClosure(sat)).toBe(true);
+      expect(activeIds(sat)).toEqual([]);
+      expect(isTokyoActive(sat)).toBe(false);
     }
   });
 });
@@ -225,19 +337,20 @@ describe("peak activity hour", () => {
 
   it("stays out of the session list, like the overlap window", () => {
     expect(TRADING_SESSIONS).not.toContain(PEAK_WINDOW);
-    expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asian", "london", "new_york"]);
+    expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asia_pacific", "london", "new_york"]);
   });
 });
 
 describe("boundaries are half-open [start, end)", () => {
-  it("hands over from Asian to London at 08:00 with no gap and no double-count", () => {
-    expect(activeIds(utc(7, 59, 59))).toEqual(["asian"]);
+  it("hands over from Asia-Pacific to London at 08:00 with no gap and no double-count", () => {
+    expect(activeIds(utc(7, 59, 59))).toEqual(["asia_pacific"]);
     expect(activeIds(utc(8, 0, 0))).toEqual(["london"]);
   });
 
-  it("opens Asian exactly at 00:00", () => {
-    expect(activeIds(utc(23, 59, 59))).toEqual([]);
-    expect(activeIds(utc(0, 0, 0))).toEqual(["asian"]);
+  it("stays open straight through midnight rather than closing at it", () => {
+    // The whole point of the wrapping window: 00:00 is not a boundary here.
+    expect(activeIds(utc(23, 59, 59))).toEqual(["asia_pacific"]);
+    expect(activeIds(utc(0, 0, 0))).toEqual(["asia_pacific"]);
   });
 
   it("closes New York exactly at 21:00", () => {
@@ -267,8 +380,8 @@ describe("countdown to the next change", () => {
     expect(stateOf(utc(9), "london").msUntilChange).toBe(7 * HOUR);
     // 13:30, New York closes 21:00 -> 7h30m.
     expect(stateOf(utc(13, 30), "new_york").msUntilChange).toBe(7 * HOUR + 30 * MINUTE);
-    // 00:00, Asian closes 08:00 -> 8h.
-    expect(stateOf(utc(0), "asian").msUntilChange).toBe(8 * HOUR);
+    // 00:00, Asia-Pacific closes 08:00 -> 8h.
+    expect(stateOf(utc(0), "asia_pacific").msUntilChange).toBe(8 * HOUR);
   });
 
   it("counts down to today's open when it hasn't happened yet", () => {
@@ -279,16 +392,16 @@ describe("countdown to the next change", () => {
   });
 
   it("rolls to tomorrow's open once today's session has closed", () => {
-    // 21:00. Asian next opens 00:00 tomorrow -> 3h.
-    expect(stateOf(utc(21), "asian").msUntilChange).toBe(3 * HOUR);
+    // 21:00, AEST. Asia-Pacific next opens 23:00 the same day -> 2h.
+    expect(stateOf(utc(21), "asia_pacific").msUntilChange).toBe(2 * HOUR);
     // ...London 08:00 tomorrow -> 11h, New York 13:00 tomorrow -> 16h.
     expect(stateOf(utc(21), "london").msUntilChange).toBe(11 * HOUR);
     expect(stateOf(utc(21), "new_york").msUntilChange).toBe(16 * HOUR);
   });
 
-  it("rolls Asian over even at 08:00, the moment it closes", () => {
-    // Not 0 and not negative: the next Asian open is 16h away.
-    expect(stateOf(utc(8), "asian").msUntilChange).toBe(16 * HOUR);
+  it("rolls Asia-Pacific over even at 08:00, the moment it closes", () => {
+    // Not 0 and not negative: under AEST the next Sydney open is 15h away.
+    expect(stateOf(utc(8), "asia_pacific").msUntilChange).toBe(15 * HOUR);
   });
 
   it("never returns a negative or zero countdown, at any minute of the day", () => {
@@ -369,7 +482,7 @@ describe("weekend closure", () => {
     // countdowns are hour-boundary ones again, not the weekend one.
     const states = sessionStates(justAfter);
     expect(states.every((s) => !s.weekendClosed)).toBe(true);
-    expect(stateOf(justAfter, "asian").msUntilChange).toBe(3 * HOUR); // Monday 00:00
+    expect(stateOf(justAfter, "asia_pacific").msUntilChange).toBe(2 * HOUR); // Sydney 23:00
   });
 
   it("follows New York rather than a fixed UTC hour, under EST", () => {
@@ -426,7 +539,8 @@ describe("local-time display", () => {
   };
 
   it("shifts forward for a zone ahead of UTC (UTC+3)", () => {
-    expect(window("asian", "Africa/Nairobi")).toBe("03:00-11:00");
+    // July is AEST, so Sydney opens 23:00 UTC = 02:00 EAT.
+    expect(window("asia_pacific", "Africa/Nairobi")).toBe("02:00-11:00");
     expect(window("london", "Africa/Nairobi")).toBe("11:00-19:00");
   });
 
@@ -436,7 +550,7 @@ describe("local-time display", () => {
   });
 
   it("handles a half-hour offset", () => {
-    expect(window("asian", "Asia/Kolkata")).toBe("05:30-13:30");
+    expect(window("asia_pacific", "Asia/Kolkata")).toBe("04:30-13:30");
     expect(window("london", "Asia/Kolkata")).toBe("13:30-21:30");
   });
 
@@ -447,8 +561,8 @@ describe("local-time display", () => {
     });
 
     it("marks it going backwards too", () => {
-      // UTC-7: Asian 00:00-08:00 UTC starts the previous local evening.
-      expect(window("asian", "America/Los_Angeles")).toBe("17:00-01:00 +1");
+      // UTC-7: the block opens 23:00 UTC, i.e. 16:00 the previous local afternoon.
+      expect(window("asia_pacific", "America/Los_Angeles")).toBe("16:00-01:00 +1");
     });
 
     it("treats an end landing exactly on local midnight as a crossing", () => {
@@ -457,10 +571,13 @@ describe("local-time display", () => {
     });
 
     it("leaves same-day windows unmarked", () => {
-      for (const id of ["asian", "london", "new_york"]) {
+      // Asia-Pacific is excluded on purpose: in UTC it *is* a midnight crossing.
+      for (const id of ["london", "new_york"]) {
         expect(window(id, "UTC")).not.toContain("+");
       }
-      expect(window("asian", "Pacific/Kiritimati")).toBe("14:00-22:00");
+      expect(window("asia_pacific", "UTC")).toBe("23:00-08:00 +1");
+      // ...but at UTC+14 the whole block lands inside one local day.
+      expect(window("asia_pacific", "Pacific/Kiritimati")).toBe("13:00-22:00");
     });
   });
 
@@ -506,7 +623,7 @@ describe("local-time display", () => {
     });
 
     it("stays out of the session list, so it can't become a fourth card", () => {
-      expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asian", "london", "new_york"]);
+      expect(TRADING_SESSIONS.map((s) => s.id)).toEqual(["asia_pacific", "london", "new_york"]);
       expect(TRADING_SESSIONS).not.toContain(OVERLAP_WINDOW);
     });
 

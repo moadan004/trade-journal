@@ -24,10 +24,76 @@ export interface TradingSession {
 }
 
 export const TRADING_SESSIONS: TradingSession[] = [
-  { id: "asian", name: "Asian", startHour: 0, endHour: 8 },
+  // Nominal start; the real one is DST-resolved - see asiaPacificWindow.
+  { id: "asia_pacific", name: "Asia-Pacific", startHour: 22, endHour: 8 },
   { id: "london", name: "London", startHour: 8, endHour: 16 },
   { id: "new_york", name: "New York", startHour: 13, endHour: 21 },
 ];
+
+/** True for a window that runs through 00:00 UTC, e.g. Asia-Pacific 22:00-08:00. */
+export function wrapsMidnight(session: TradingSession): boolean {
+  return session.endHour <= session.startHour;
+}
+
+/**
+ * Sydney and Tokyo, tracked as one block.
+ *
+ * Every window in this file is the centre's 09:00-18:00 local cash session under
+ * standard time, which is what puts London at 08:00-16:00 and New York at
+ * 13:00-21:00 UTC. Sydney and Tokyo are quoted the same way:
+ *
+ *   Tokyo   09:00-18:00 JST  = 00:00-09:00 UTC, fixed - Japan has no DST at all.
+ *   Sydney  09:00-18:00 AEDT = 22:00-07:00 UTC  (southern summer)
+ *           09:00-18:00 AEST = 23:00-08:00 UTC  (southern winter)
+ *
+ * So the block opens with Sydney at 22:00 or 23:00 UTC depending on the season -
+ * resolved through the IANA zone rather than pinned, exactly as the weekly close
+ * is. It closes at 08:00 UTC, London's open, which clips the last hour of Tokyo
+ * for the same reason the old single "Asian" card did: the windows have to hand
+ * over cleanly at a shared boundary.
+ *
+ * This is the first window here that runs through midnight UTC, which is why
+ * wrapsMidnight exists.
+ */
+export const ASIA_PACIFIC = TRADING_SESSIONS[0];
+export const SYDNEY_TIME_ZONE = "Australia/Sydney";
+export const TOKYO_TIME_ZONE = "Asia/Tokyo";
+/** Every centre's cash session, in its own local time. */
+export const CENTRE_OPEN_HOUR = 9;
+export const CENTRE_CLOSE_HOUR = 18;
+/** Tokyo joins here. Fixed: 09:00 JST is 00:00 UTC year-round. */
+export const TOKYO_OPEN_UTC_HOUR = 0;
+
+/** The UTC hour of Sydney's 09:00 on the date of `now`: 22 under AEDT, 23 under AEST. */
+export function sydneyOpenUtcHour(now: Date): number {
+  // Offset in whole hours between UTC and Sydney at this instant.
+  const c = zonedClock(now, SYDNEY_TIME_ZONE);
+  const offsetHours = Math.round(
+    (Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute) -
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate(),
+        now.getUTCHours(),
+        now.getUTCMinutes(),
+      )) /
+      MS_PER_HOUR,
+  );
+  return (CENTRE_OPEN_HOUR - offsetHours + 24) % 24;
+}
+
+/** The block's window in UTC hours for the date of `now`, start DST-resolved. */
+export function asiaPacificWindow(now: Date): TradingSession {
+  return { ...ASIA_PACIFIC, startHour: sydneyOpenUtcHour(now) };
+}
+
+/** True once Tokyo has joined - the meaningful transition inside the block. */
+export function isTokyoActive(now: Date): boolean {
+  if (isWeekendClosure(now)) return false;
+
+  const { hour } = zonedClock(now, TOKYO_TIME_ZONE);
+  return hour >= CENTRE_OPEN_HOUR && hour < CENTRE_CLOSE_HOUR && msOfUtcDay(now) < 8 * MS_PER_HOUR;
+}
 
 /** UTC hours during which London and New York are both open. */
 export const OVERLAP_START_HOUR = 13;
@@ -105,20 +171,29 @@ const WEEKDAY_INDEX: Record<string, number> = {
   Sat: 6,
 };
 
-const NY_FORMAT = new Intl.DateTimeFormat("en-US", {
-  timeZone: MARKET_TIME_ZONE,
-  weekday: "short",
-  year: "numeric",
-  month: "2-digit",
-  day: "2-digit",
-  hour: "2-digit",
-  minute: "2-digit",
-  second: "2-digit",
-  // h23 rather than hour12:false - some ICU builds render midnight as "24".
-  hourCycle: "h23",
-});
+const zoneFormats = new Map<string, Intl.DateTimeFormat>();
 
-interface NyClock {
+function zoneFormat(timeZone: string): Intl.DateTimeFormat {
+  let existing = zoneFormats.get(timeZone);
+  if (!existing) {
+    existing = new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "short",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      // h23 rather than hour12:false - some ICU builds render midnight as "24".
+      hourCycle: "h23",
+    });
+    zoneFormats.set(timeZone, existing);
+  }
+  return existing;
+}
+
+interface ZonedClock {
   year: number;
   month: number;
   day: number;
@@ -129,10 +204,10 @@ interface NyClock {
   weekday: number;
 }
 
-/** The New York wall clock at a given instant. */
-function nyClock(date: Date): NyClock {
+/** The wall clock in a given IANA zone at a given instant. */
+function zonedClock(date: Date, timeZone: string): ZonedClock {
   const parts: Record<string, string> = {};
-  for (const part of NY_FORMAT.formatToParts(date)) parts[part.type] = part.value;
+  for (const part of zoneFormat(timeZone).formatToParts(date)) parts[part.type] = part.value;
 
   return {
     year: Number(parts.year),
@@ -147,7 +222,7 @@ function nyClock(date: Date): NyClock {
 
 /** ms to add to a UTC instant to get the New York wall clock reading. */
 function nyOffset(date: Date): number {
-  const c = nyClock(date);
+  const c = zonedClock(date, MARKET_TIME_ZONE);
   return Date.UTC(c.year, c.month - 1, c.day, c.hour, c.minute, c.second) - date.getTime();
 }
 
@@ -173,7 +248,7 @@ function instantAtNyHour(year: number, month: number, day: number, hour: number)
 
 /** True while the whole FX market is shut for the weekend. */
 export function isWeekendClosure(now: Date): boolean {
-  const { weekday, hour } = nyClock(now);
+  const { weekday, hour } = zonedClock(now, MARKET_TIME_ZONE);
 
   if (weekday === SATURDAY) return true;
   if (weekday === FRIDAY) return hour >= MARKET_BOUNDARY_HOUR_NY;
@@ -185,7 +260,7 @@ export function isWeekendClosure(now: Date): boolean {
 export function msUntilMarketOpen(now: Date): number {
   if (!isWeekendClosure(now)) return 0;
 
-  const c = nyClock(now);
+  const c = zonedClock(now, MARKET_TIME_ZONE);
   // Days forward to Sunday in New York's calendar. Friday and Saturday look
   // ahead; a Sunday before 17:00 opens later the same day.
   const daysAhead = c.weekday === SUNDAY ? 0 : 7 - c.weekday;
@@ -236,15 +311,27 @@ export function sessionState(session: TradingSession, now: Date): SessionState {
     return { session, active: false, msUntilChange: msUntilMarketOpen(now), weekendClosed: true };
   }
 
+  // Asia-Pacific opens when Sydney does, which moves with Australian DST.
+  const resolved = session.id === ASIA_PACIFIC.id ? asiaPacificWindow(now) : session;
+
   const elapsed = msOfUtcDay(now);
-  const start = session.startHour * MS_PER_HOUR;
-  const end = session.endHour * MS_PER_HOUR;
+  const start = resolved.startHour * MS_PER_HOUR;
+  const end = resolved.endHour * MS_PER_HOUR;
 
   // Half-open [start, end), matching the backend's bucket convention: at exactly
   // 16:00 UTC London is closed and New York is open, never both or neither.
-  const active = elapsed >= start && elapsed < end;
+  //
+  // A window through midnight inverts the test: 22:00-08:00 is on when the clock
+  // is at or past 22:00 OR still before 08:00, where the same expression for a
+  // same-day window would be on for neither.
+  const wraps = wrapsMidnight(resolved);
+  const active = wraps ? elapsed >= start || elapsed < end : elapsed >= start && elapsed < end;
 
-  if (active) return { session, active, msUntilChange: end - elapsed, weekendClosed: false };
+  if (active) {
+    // Past midnight the close is today's; before it, tomorrow's.
+    const close = wraps && elapsed >= start ? end + MS_PER_DAY : end;
+    return { session, active, msUntilChange: close - elapsed, weekendClosed: false };
+  }
 
   // Already past today's open, so the next one is tomorrow's.
   const nextOpen = elapsed < start ? start : start + MS_PER_DAY;
@@ -377,8 +464,13 @@ export function localSessionWindow(
     reference.getUTCMonth(),
     reference.getUTCDate(),
   );
-  const start = new Date(midnightUtc + session.startHour * MS_PER_HOUR);
-  const end = new Date(midnightUtc + session.endHour * MS_PER_HOUR);
+  const resolved = session.id === ASIA_PACIFIC.id ? asiaPacificWindow(reference) : session;
+  const start = new Date(midnightUtc + resolved.startHour * MS_PER_HOUR);
+  // A window through midnight ends on the following UTC day, so the end instant
+  // has to be pushed a day forward before it is converted for display.
+  const end = new Date(
+    midnightUtc + (resolved.endHour + (wrapsMidnight(resolved) ? 24 : 0)) * MS_PER_HOUR,
+  );
 
   return {
     start: formatLocalTime(start, timeZone),
